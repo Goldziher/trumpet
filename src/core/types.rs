@@ -1,6 +1,6 @@
-use ahash::AHashSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 /// Unique identifier for a registered agent.
@@ -212,7 +212,7 @@ pub struct Conversation {
     /// Optional display name (e.g. `"planning session"`).
     pub name: Option<String>,
     /// Agents participating in this conversation.
-    pub participants: AHashSet<AgentId>,
+    pub participants: HashSet<AgentId>,
     /// Wall-clock time at which the conversation was created.
     pub created_at: DateTime<Utc>,
 }

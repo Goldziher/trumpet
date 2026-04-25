@@ -7,6 +7,7 @@
 mod error;
 mod routes;
 mod state;
+pub(crate) mod ws;
 
 pub use state::AppState;
 

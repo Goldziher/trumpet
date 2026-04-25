@@ -3,4 +3,5 @@ pub mod config;
 pub mod core;
 pub mod daemon;
 pub mod error;
+pub mod grpc;
 pub mod server;

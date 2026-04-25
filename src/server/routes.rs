@@ -18,6 +18,7 @@ use crate::core::types::{
 use crate::error::{Error, Result};
 
 use super::state::AppState;
+use super::ws;
 
 // ── Request / response types ──────────────────────────────────────────────────
 
@@ -251,6 +252,7 @@ pub fn router(state: AppState) -> Router {
         .route("/skills/{name}", get(get_skill_by_name))
         .route("/skills/{name}/invoke", post(invoke_skill))
         .route("/events", get(events))
+        .route("/ws", get(ws::ws_handler))
         .with_state(state)
 }
 
