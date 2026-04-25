@@ -6,6 +6,7 @@
 
 pub mod bus;
 pub mod chat;
+pub mod code_tools;
 pub mod registry;
 pub mod skills;
 pub mod types;

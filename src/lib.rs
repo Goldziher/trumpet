@@ -4,5 +4,6 @@ pub mod core;
 pub mod daemon;
 pub mod error;
 pub mod grpc;
+pub mod mcp;
 pub mod server;
 pub mod state;
