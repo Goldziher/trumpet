@@ -43,12 +43,27 @@ use self::auth::{
     BearerTokenInterceptor, PeerCheckedUnixListener, current_uid, load_or_create_token,
 };
 
-/// Start the Trumpet daemon.
+/// Start the Trumpet daemon, blocking until Ctrl-C / SIGTERM.
 ///
 /// Binds a Unix domain socket for HTTP, starts gRPC on the configured TCP
 /// port, restores persisted state, registers built-in tools, spawns a
-/// periodic snapshot timer, and blocks until Ctrl-C.
+/// periodic snapshot timer, and blocks until shutdown.
 pub async fn serve(config: &Config) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let signal_cancel = cancel.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        signal_cancel.cancel();
+    });
+    serve_with_shutdown(config, cancel).await
+}
+
+/// Start the Trumpet daemon with an externally-supplied shutdown signal.
+///
+/// Identical to [`serve`] except shutdown is triggered when `cancel` is
+/// cancelled rather than via OS signals. Used by integration tests so a
+/// fixture can drive an in-process daemon to a clean stop.
+pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> Result<()> {
     let socket_path = &config.daemon.socket_path;
 
     // Remove stale socket left by a previous run.
@@ -123,11 +138,9 @@ pub async fn serve(config: &Config) -> Result<()> {
                 path: grpc_addr.clone(),
                 reason: format!("invalid gRPC listen address: {e}"),
             })?;
-    // ── Cancellation token ───────────────────────────────────────────────────
-    // Shared across all background tasks. When the HTTP shutdown signal
-    // arrives, we cancel this token so the gRPC server drains in-flight
-    // requests via serve_with_shutdown rather than getting hard-aborted.
-    let cancel = CancellationToken::new();
+    // The cancellation token is supplied by the caller. It fires when the
+    // daemon should stop; we share it across the gRPC server, axum, and
+    // the snapshot/push workers so all background tasks drain together.
 
     let grpc_service = NexusA2aService::new(state.clone());
     let grpc_interceptor =
@@ -213,8 +226,9 @@ pub async fn serve(config: &Config) -> Result<()> {
     // ── HTTP server ──────────────────────────────────────────────────────────
     let app = routes::router(state.clone());
 
+    let http_cancel = cancel.clone();
     axum::serve(secured_listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move { http_cancel.cancelled().await })
         .await
         .map_err(|e| crate::error::Error::InternalUnexpected {
             reason: e.to_string(),
@@ -223,8 +237,8 @@ pub async fn serve(config: &Config) -> Result<()> {
     // ── Shutdown ─────────────────────────────────────────────────────────────
     info!("HTTP server stopped; draining background tasks");
 
-    // Signal gRPC to drain in-flight RPCs. Wait up to 30s for the server
-    // to finish; force-abort beyond that.
+    // Make sure the cancel is fired even if axum returned for some other
+    // reason (the caller may have cancelled, or axum may have errored).
     cancel.cancel();
     match tokio::time::timeout(std::time::Duration::from_secs(30), grpc_handle).await {
         Ok(Ok(())) => info!("gRPC server stopped gracefully"),

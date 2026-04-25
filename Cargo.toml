@@ -21,7 +21,7 @@ prost-types = "0.14"
 reqwest = { version = "0.13", features = ["json"] }
 rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
 rmp-serde = "1"
-schemars = "1.0"
+schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2"
@@ -41,8 +41,11 @@ uuid = { version = "1.23", features = ["v4", "serde"] }
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
 serial_test = "3"
 tempfile = "3"
 tokio-test = "0.4"
 tokio-tungstenite = "0.29"
 tower = { version = "0.5.3", features = ["util"] }
+wiremock = "0.6"
