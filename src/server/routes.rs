@@ -72,6 +72,15 @@ pub struct SubmitTaskRequest {
     pub message: String,
     pub context_id: Option<String>,
     pub assignee: Option<String>,
+    /// Optional task deadline as a count of milliseconds from receipt.
+    /// The watchdog (see `core::watchdog`) fails any non-terminal task
+    /// past this instant. Mutually exclusive with `deadline_at`; when both
+    /// are set, `deadline_at` wins.
+    #[serde(default)]
+    pub deadline_ms: Option<u64>,
+    /// Optional absolute task deadline (RFC 3339 timestamp).
+    #[serde(default)]
+    pub deadline_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Query parameters for listing tasks.
@@ -273,9 +282,15 @@ async fn submit_task(
         metadata: None,
     };
 
+    let deadline = req.deadline_at.or_else(|| {
+        req.deadline_ms
+            .and_then(|ms| chrono::Duration::try_milliseconds(ms as i64))
+            .map(|d| chrono::Utc::now() + d)
+    });
+
     let facade = Arc::clone(&state.task_facade);
     let task = facade
-        .submit_task(message, context_id, assignee, None)
+        .submit_task_with_deadline(message, context_id, assignee, None, deadline)
         .await?;
     Ok(Json(task))
 }

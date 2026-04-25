@@ -77,6 +77,9 @@ pub struct SubmitTaskArgs {
     pub context_id: Option<String>,
     /// Optional UUID string of the agent to assign the task to.
     pub assignee: Option<String>,
+    /// Optional deadline expressed as milliseconds from receipt; the
+    /// watchdog fails any non-terminal task past this instant.
+    pub deadline_ms: Option<u64>,
 }
 
 /// Arguments for the `get_task` tool.
@@ -331,9 +334,14 @@ impl TrumpetMcpServer {
             metadata: None,
         };
 
+        let deadline = args
+            .deadline_ms
+            .and_then(|ms| chrono::Duration::try_milliseconds(ms as i64))
+            .map(|d| chrono::Utc::now() + d);
+
         let facade = std::sync::Arc::clone(&self.state.task_facade);
         let task = facade
-            .submit_task(message, context_id, assignee, None)
+            .submit_task_with_deadline(message, context_id, assignee, None, deadline)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 

@@ -134,6 +134,43 @@ async fn heartbeat_endpoint_keeps_agent_connected_and_can_reconnect() {
 }
 
 #[tokio::test]
+async fn task_with_short_deadline_is_failed_by_watchdog() {
+    let daemon = TestDaemon::builder()
+        .heartbeat_interval_secs(1)
+        .agent_timeout_secs(60)
+        .spawn()
+        .await;
+
+    // Submit a task with a 200ms deadline.
+    let body = serde_json::to_vec(&serde_json::json!({
+        "message": "do work",
+        "deadline_ms": 200u64,
+    }))
+    .unwrap();
+    let (status, body) = unix_post(&daemon.socket_path, "/tasks", "application/json", &body).await;
+    assert_eq!(status, 200);
+    let task: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = task["id"].as_str().expect("task id").to_owned();
+
+    // Wait for the watchdog to mark it Rejected (Submitted -> Rejected
+    // because we have no connected agent to pick it up).
+    wait_for(
+        &daemon.socket_path,
+        &format!("/tasks/{task_id}"),
+        |v| {
+            v.get("status")
+                .and_then(|s| s.get("state"))
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| s == "rejected" || s == "failed")
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    daemon.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
 async fn submit_task_to_disconnected_agent_is_rejected() {
     let daemon = TestDaemon::builder()
         .heartbeat_interval_secs(1)
