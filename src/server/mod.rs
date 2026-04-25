@@ -15,7 +15,10 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tracing::info;
 
+use rmcp::ServiceExt as _;
+
 use crate::config::Config;
+use crate::config::types::McpTransport;
 use crate::core::code_tools::CodeTools;
 use crate::core::types::ToolProvider;
 use crate::error::Result;
@@ -84,6 +87,36 @@ pub async fn serve(config: &Config) -> Result<()> {
         }
     });
 
+    // ── MCP server ───────────────────────────────────────────────────────────
+    let mcp_handle = if config.mcp.enabled {
+        match config.mcp.transport {
+            McpTransport::Stdio => {
+                let mcp_server = crate::mcp::handler::TrumpetMcpServer::new(state.clone());
+                Some(tokio::spawn(async move {
+                    info!("MCP server starting on stdio");
+                    let transport = rmcp::transport::io::stdio();
+                    match mcp_server.serve(transport).await {
+                        Ok(running) => {
+                            if let Err(e) = running.waiting().await {
+                                tracing::error!(error = %e, "MCP stdio server stopped with error");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "MCP stdio server failed to start");
+                        }
+                    }
+                }))
+            }
+            McpTransport::Http => {
+                tracing::warn!("MCP HTTP transport not yet implemented; skipping MCP server");
+                None
+            }
+        }
+    } else {
+        tracing::info!("MCP server disabled by configuration");
+        None
+    };
+
     // ── Periodic snapshot timer ──────────────────────────────────────────────
     let snapshot_interval = config.storage.snapshot_interval_secs;
     let snapshot_state = state.clone();
@@ -115,6 +148,9 @@ pub async fn serve(config: &Config) -> Result<()> {
     // ── Shutdown ─────────────────────────────────────────────────────────────
     snapshot_handle.abort();
     grpc_handle.abort();
+    if let Some(handle) = mcp_handle {
+        handle.abort();
+    }
 
     info!("saving state snapshot before shutdown");
     let snapshot = state.to_snapshot().await;

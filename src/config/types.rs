@@ -77,12 +77,21 @@ impl Default for ServerConfig {
 pub struct McpConfig {
     /// Transport mechanism for the MCP server.
     pub transport: McpTransport,
+    /// Whether the MCP server is enabled. Disable when running as a
+    /// background daemon where stdin is not available.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             transport: McpTransport::Stdio,
+            enabled: true,
         }
     }
 }
