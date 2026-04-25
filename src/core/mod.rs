@@ -12,6 +12,7 @@ pub mod router;
 pub mod task_facade;
 pub mod task_manager;
 pub mod task_types;
+pub mod tool_invoker;
 pub mod tools;
 pub mod types;
 
@@ -25,7 +26,8 @@ pub use task_types::{
     AgentCapabilities, Artifact, ArtifactId, ContextId, MessageRole, Part, Task, TaskFilter,
     TaskId, TaskMessage, TaskState, TaskStatus,
 };
-pub use tools::ToolRegistry;
+pub use tool_invoker::ToolInvoker;
+pub use tools::{ToolRegistry, ToolResult};
 pub use types::{
     AgentId, AgentInfo, AgentStatus, ChatMessage, Conversation, ConversationId, MessageId, ToolId,
     ToolInfo, ToolProvider,

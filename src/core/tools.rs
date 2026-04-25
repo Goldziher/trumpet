@@ -7,10 +7,22 @@
 use std::sync::Arc;
 
 use ahash::AHashMap;
+use serde::{Deserialize, Serialize};
 
 use crate::core::bus::{Event, MessageBus};
+use crate::core::task_types::Task;
 use crate::core::types::{ToolId, ToolInfo, ToolProvider};
 use crate::error::Error;
+
+/// Result of invoking a tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResult {
+    /// Immediate result from a built-in tool.
+    Immediate { output: serde_json::Value },
+    /// Asynchronous result — a task was created and assigned to an agent.
+    TaskCreated { task: Box<Task> },
+}
 
 /// Registry of all tools available in the nexus.
 ///

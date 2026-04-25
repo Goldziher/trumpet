@@ -173,6 +173,50 @@ impl CodeTools {
                 reason: format!("parse_file task panicked: {e}"),
             })?
     }
+
+    /// Dispatch a tool invocation by name.
+    ///
+    /// Extracts `path` from the input JSON and routes to the appropriate
+    /// method. Returns the result serialized as JSON.
+    pub async fn dispatch(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        let path = input.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            Error::ToolInvocationFailed {
+                name: name.to_owned(),
+                reason: "missing required 'path' parameter".to_owned(),
+            }
+        })?;
+
+        match name {
+            "code.scan_repo" => {
+                let result = self.scan_repo(path).await?;
+                serde_json::to_value(result).map_err(|e| Error::ToolInvocationFailed {
+                    name: name.to_owned(),
+                    reason: format!("serialization failed: {e}"),
+                })
+            }
+            "code.read_file" => {
+                let result = self.read_file(path).await?;
+                serde_json::to_value(result).map_err(|e| Error::ToolInvocationFailed {
+                    name: name.to_owned(),
+                    reason: format!("serialization failed: {e}"),
+                })
+            }
+            "code.parse_file" => {
+                let result = self.parse_file(path).await?;
+                serde_json::to_value(result).map_err(|e| Error::ToolInvocationFailed {
+                    name: name.to_owned(),
+                    reason: format!("serialization failed: {e}"),
+                })
+            }
+            _ => Err(Error::ToolNotFound {
+                name: name.to_owned(),
+            }),
+        }
+    }
 }
 
 // ── Blocking helpers (run inside spawn_blocking) ──────────────────────────────
@@ -497,5 +541,42 @@ mod tests {
             arr.is_some_and(|a| !a.is_empty()),
             "structure array must be non-empty for types.rs"
         );
+    }
+
+    // ── dispatch ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_code_read_file_succeeds() {
+        let tools = default_tools();
+        let input = serde_json::json!({"path": lib_rs_path()});
+        let result = tools
+            .dispatch("code.read_file", input)
+            .await
+            .expect("dispatch must succeed for code.read_file");
+
+        assert!(
+            result.get("content").is_some(),
+            "result must have content field"
+        );
+        assert!(
+            result.get("language").is_some(),
+            "result must have language field"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_tool_returns_error() {
+        let tools = default_tools();
+        let input = serde_json::json!({"path": "/tmp"});
+        let result = tools.dispatch("unknown.tool", input).await;
+        assert!(result.is_err(), "unknown tool name must return error");
+    }
+
+    #[tokio::test]
+    async fn dispatch_missing_path_returns_error() {
+        let tools = default_tools();
+        let input = serde_json::json!({});
+        let result = tools.dispatch("code.read_file", input).await;
+        assert!(result.is_err(), "missing path must return error");
     }
 }

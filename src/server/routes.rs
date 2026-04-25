@@ -54,10 +54,6 @@ pub struct SendMessageRequest {
 #[derive(Debug, Deserialize)]
 pub(crate) struct InvokeToolRequest {
     /// The JSON payload to pass to the tool.
-    #[expect(
-        dead_code,
-        reason = "stub: field read by serde, used when invocation is implemented"
-    )]
     pub input: serde_json::Value,
 }
 
@@ -194,20 +190,26 @@ async fn get_tool_by_name(
 
 /// POST /tools/{name}/invoke — invoke a tool by name.
 ///
-/// Validates the tool exists, then delegates to the provider. Currently
-/// returns an error because provider invocation is not yet implemented.
+/// Resolves the tool from the registry and dispatches to the appropriate
+/// provider. Built-in tools return immediately; agent-provided tools
+/// create a task.
 async fn invoke_tool(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(_req): Json<InvokeToolRequest>,
+    Json(req): Json<InvokeToolRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    // Verify the tool exists before reporting "not implemented".
-    let tools = state.tools.read().await;
-    let _info = tools
-        .find_by_name(&name)
-        .ok_or_else(|| Error::ToolNotFound { name: name.clone() })?;
-
-    Err(Error::ToolNotImplemented { name })
+    let invoker = crate::core::ToolInvoker::new(
+        Arc::clone(&state.tools),
+        Arc::clone(&state.code_tools),
+        Arc::clone(&state.tasks),
+        Arc::clone(&state.registry),
+    );
+    let result = invoker.invoke(&name, req.input).await?;
+    let json = serde_json::to_value(result).map_err(|e| Error::ToolInvocationFailed {
+        name,
+        reason: format!("serialization failed: {e}"),
+    })?;
+    Ok(Json(json))
 }
 
 // ── Task helpers ─────────────────────────────────────────────────────────────
