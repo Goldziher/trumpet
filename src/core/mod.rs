@@ -7,11 +7,14 @@
 pub mod bus;
 pub mod chat;
 pub mod registry;
+pub mod skills;
 pub mod types;
 
 pub use bus::{Event, MessageBus};
 pub use chat::ChatManager;
 pub use registry::AgentRegistry;
+pub use skills::SkillRegistry;
 pub use types::{
-    AgentId, AgentInfo, AgentStatus, ChatMessage, Conversation, ConversationId, MessageId,
+    AgentId, AgentInfo, AgentStatus, ChatMessage, Conversation, ConversationId, MessageId, SkillId,
+    SkillInfo, SkillProvider,
 };

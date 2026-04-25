@@ -6,7 +6,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::core::types::{AgentId, AgentInfo, ChatMessage};
+use crate::core::types::{AgentId, AgentInfo, ChatMessage, SkillId, SkillInfo};
 
 /// Events propagated through the message bus.
 #[derive(Clone, Debug, Serialize)]
@@ -18,6 +18,10 @@ pub enum Event {
     AgentDeregistered(AgentId),
     /// A new message has been posted to a conversation.
     NewMessage(ChatMessage),
+    /// A new skill has been registered.
+    SkillRegistered(SkillInfo),
+    /// A skill has been deregistered.
+    SkillDeregistered(SkillId),
 }
 
 /// Internal broadcast channel for intra-process event propagation.

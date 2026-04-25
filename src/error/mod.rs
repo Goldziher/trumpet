@@ -76,6 +76,31 @@ pub enum Error {
     #[error("conversation must have at least one participant")]
     ConversationEmptyParticipants,
 
+    // ── Skill ─────────────────────────────────────────────────────────────────
+    /// No skill with this name is registered.
+    #[error("skill '{name}' not found")]
+    SkillNotFound { name: String },
+
+    /// No skill with this ID is registered.
+    #[error("skill with id '{id}' not found")]
+    SkillNotFoundById { id: String },
+
+    /// A skill with this name is already registered.
+    #[error("skill '{name}' is already registered")]
+    SkillAlreadyRegistered { name: String },
+
+    /// The provided skill name is syntactically invalid.
+    #[error("skill name '{name}' is invalid: {reason}")]
+    SkillInvalidName { name: String, reason: String },
+
+    /// Skill invocation failed.
+    #[error("skill invocation failed for '{name}': {reason}")]
+    SkillInvocationFailed { name: String, reason: String },
+
+    /// The agent providing the skill is not connected.
+    #[error("skill provider unavailable for '{name}'")]
+    SkillProviderUnavailable { name: String },
+
     // ── Config ────────────────────────────────────────────────────────────────
     /// The config file contains invalid TOML.
     #[error("invalid TOML in config file '{path}': {reason}")]
@@ -120,6 +145,12 @@ impl ErrorCode for Error {
             Self::ConversationNotFound { .. } => "CONVERSATION_NOT_FOUND",
             Self::ConversationNotParticipant { .. } => "CONVERSATION_NOT_PARTICIPANT",
             Self::ConversationEmptyParticipants => "CONVERSATION_EMPTY_PARTICIPANTS",
+            Self::SkillNotFound { .. } => "SKILL_NOT_FOUND",
+            Self::SkillNotFoundById { .. } => "SKILL_NOT_FOUND_BY_ID",
+            Self::SkillAlreadyRegistered { .. } => "SKILL_ALREADY_REGISTERED",
+            Self::SkillInvalidName { .. } => "SKILL_INVALID_NAME",
+            Self::SkillInvocationFailed { .. } => "SKILL_INVOCATION_FAILED",
+            Self::SkillProviderUnavailable { .. } => "SKILL_PROVIDER_UNAVAILABLE",
             Self::ConfigInvalidToml { .. } => "CONFIG_INVALID_TOML",
             Self::ConfigMissingDir { .. } => "CONFIG_MISSING_DIR",
             Self::ConfigPermissionDenied { .. } => "CONFIG_PERMISSION_DENIED",
@@ -131,20 +162,25 @@ impl ErrorCode for Error {
 
     fn http_status(&self) -> StatusCode {
         match self {
-            Self::DaemonNotRunning | Self::DaemonShutdownFailed { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            Self::DaemonNotRunning
+            | Self::DaemonShutdownFailed { .. }
+            | Self::SkillProviderUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::DaemonAlreadyRunning { .. }
             | Self::AgentAlreadyRegistered { .. }
+            | Self::SkillAlreadyRegistered { .. }
             | Self::DaemonStaleSocket { .. } => StatusCode::CONFLICT,
             Self::DaemonBindFailed { .. }
             | Self::ConnectionRefused
             | Self::ConnectionTimeout { .. }
             | Self::ConnectionSocketNotFound { .. } => StatusCode::BAD_GATEWAY,
+            Self::SkillInvocationFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::AgentNotFound { .. }
             | Self::ConversationNotFound { .. }
+            | Self::SkillNotFound { .. }
+            | Self::SkillNotFoundById { .. }
             | Self::ConfigMissingDir { .. } => StatusCode::NOT_FOUND,
             Self::AgentInvalidName { .. }
+            | Self::SkillInvalidName { .. }
             | Self::ConversationEmptyParticipants
             | Self::ConfigInvalidToml { .. }
             | Self::ConfigValidationFailed { .. } => StatusCode::UNPROCESSABLE_ENTITY,
@@ -203,6 +239,24 @@ impl ErrorCode for Error {
             Self::ConversationEmptyParticipants => {
                 "provide at least one agent name when creating a conversation".to_owned()
             }
+            Self::SkillNotFound { name } => {
+                format!("list registered skills with GET /skills; '{name}' was not found")
+            }
+            Self::SkillNotFoundById { id } => {
+                format!("no skill with id '{id}'; list registered skills with GET /skills")
+            }
+            Self::SkillAlreadyRegistered { name } => {
+                format!("deregister the existing skill first or use a different name; '{name}' already exists")
+            }
+            Self::SkillInvalidName { .. } => {
+                "skill names must be 1-64 chars, alphanumeric plus hyphens, underscores, and dots; no leading/trailing hyphen or dot".to_owned()
+            }
+            Self::SkillInvocationFailed { name, reason } => {
+                format!("skill '{name}' failed to execute: {reason}")
+            }
+            Self::SkillProviderUnavailable { name } => {
+                format!("the agent providing skill '{name}' is not currently connected; check agent status")
+            }
             Self::ConfigInvalidToml { path, .. } => {
                 format!("fix the TOML syntax error in '{path}'; run `trumpet config validate` for details")
             }
@@ -240,6 +294,16 @@ impl From<crate::config::ConfigError> for Error {
             crate::config::ConfigError::ValidationFailed(reason) => {
                 Self::ConfigValidationFailed { reason }
             }
+            crate::config::ConfigError::Io { path, source } => Self::InternalUnexpected {
+                reason: format!("reading config file '{path}': {source}"),
+            },
+            crate::config::ConfigError::InvalidEnvVar {
+                var,
+                value,
+                expected,
+            } => Self::ConfigValidationFailed {
+                reason: format!("env var {var}={value:?}: expected {expected}"),
+            },
         }
     }
 }
@@ -289,6 +353,26 @@ mod tests {
                 id: "abc-123".to_owned(),
             },
             Error::ConversationEmptyParticipants,
+            Error::SkillNotFound {
+                name: "scan".to_owned(),
+            },
+            Error::SkillNotFoundById {
+                id: "f47ac10b-58cc-4372-a567-0e02b2c3d479".to_owned(),
+            },
+            Error::SkillAlreadyRegistered {
+                name: "scan".to_owned(),
+            },
+            Error::SkillInvalidName {
+                name: "-bad".to_owned(),
+                reason: "leading hyphen".to_owned(),
+            },
+            Error::SkillInvocationFailed {
+                name: "scan".to_owned(),
+                reason: "timeout".to_owned(),
+            },
+            Error::SkillProviderUnavailable {
+                name: "scan".to_owned(),
+            },
             Error::ConfigInvalidToml {
                 path: "~/.trumpet/config.toml".to_owned(),
                 reason: "unexpected key".to_owned(),

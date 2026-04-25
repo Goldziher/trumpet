@@ -12,7 +12,9 @@ use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::core::Event;
-use crate::core::types::{AgentId, AgentInfo, ChatMessage, Conversation, ConversationId};
+use crate::core::types::{
+    AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, SkillInfo,
+};
 use crate::error::{Error, Result};
 
 use super::state::AppState;
@@ -43,6 +45,17 @@ pub struct CreateConversationRequest {
 pub struct SendMessageRequest {
     pub sender: AgentId,
     pub content: String,
+}
+
+/// Request body for invoking a skill.
+#[derive(Debug, Deserialize)]
+pub(crate) struct InvokeSkillRequest {
+    /// The JSON payload to pass to the skill.
+    #[expect(
+        dead_code,
+        reason = "stub: field read by serde, used when invocation is implemented"
+    )]
+    pub input: serde_json::Value,
 }
 
 /// Response body for the health-check endpoint.
@@ -140,6 +153,47 @@ async fn get_messages(
     Ok(Json(messages))
 }
 
+/// GET /skills — list all registered skills.
+async fn list_skills(State(state): State<AppState>) -> Json<Vec<SkillInfo>> {
+    let skills = state.skills.read().await;
+    let list: Vec<SkillInfo> = skills.list().into_iter().cloned().collect();
+    Json(list)
+}
+
+/// GET /skills/{name} — find a skill by name.
+async fn get_skill_by_name(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<SkillInfo>> {
+    let skills = state.skills.read().await;
+    let info = skills
+        .find_by_name(&name)
+        .ok_or_else(|| Error::SkillNotFound { name: name.clone() })?
+        .clone();
+    Ok(Json(info))
+}
+
+/// POST /skills/{name}/invoke — invoke a skill by name.
+///
+/// Validates the skill exists, then delegates to the provider. Currently
+/// returns an error because provider invocation is not yet implemented.
+async fn invoke_skill(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(_req): Json<InvokeSkillRequest>,
+) -> Result<Json<serde_json::Value>> {
+    // Verify the skill exists before reporting "not implemented".
+    let skills = state.skills.read().await;
+    let _info = skills
+        .find_by_name(&name)
+        .ok_or_else(|| Error::SkillNotFound { name: name.clone() })?;
+
+    Err(Error::SkillInvocationFailed {
+        name,
+        reason: "skill invocation not yet implemented".to_owned(),
+    })
+}
+
 /// GET /events — SSE stream of domain events.
 ///
 /// Serializes each [`Event`] variant into a typed SSE event. Lagged
@@ -173,6 +227,8 @@ fn event_type(event: &Event) -> &'static str {
         Event::AgentRegistered(_) => "agent_registered",
         Event::AgentDeregistered(_) => "agent_deregistered",
         Event::NewMessage(_) => "new_message",
+        Event::SkillRegistered(_) => "skill_registered",
+        Event::SkillDeregistered(_) => "skill_deregistered",
     }
 }
 
@@ -191,6 +247,9 @@ pub fn router(state: AppState) -> Router {
             "/conversations/{id}/messages",
             post(send_message).get(get_messages),
         )
+        .route("/skills", get(list_skills))
+        .route("/skills/{name}", get(get_skill_by_name))
+        .route("/skills/{name}/invoke", post(invoke_skill))
         .route("/events", get(events))
         .with_state(state)
 }
@@ -256,6 +315,34 @@ mod tests {
             timestamp: Utc::now(),
         };
         assert_eq!(event_type(&Event::NewMessage(msg)), "new_message");
+    }
+
+    #[test]
+    fn event_type_skill_registered() {
+        use crate::core::types::{SkillId, SkillInfo, SkillProvider};
+
+        let info = SkillInfo {
+            id: SkillId::new(),
+            name: "test".to_owned(),
+            description: "desc".to_owned(),
+            input_schema: serde_json::json!({}),
+            output_schema: serde_json::json!({}),
+            provider: SkillProvider::BuiltIn,
+        };
+        assert_eq!(
+            event_type(&Event::SkillRegistered(info)),
+            "skill_registered"
+        );
+    }
+
+    #[test]
+    fn event_type_skill_deregistered() {
+        use crate::core::types::SkillId;
+
+        assert_eq!(
+            event_type(&Event::SkillDeregistered(SkillId::new())),
+            "skill_deregistered"
+        );
     }
 
     #[test]

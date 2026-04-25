@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::Config;
-use crate::core::{AgentRegistry, ChatManager, MessageBus};
+use crate::core::{AgentRegistry, ChatManager, MessageBus, SkillRegistry};
 
 /// Cloneable handle to shared daemon state.
 ///
@@ -17,6 +17,8 @@ pub struct AppState {
     pub registry: Arc<RwLock<AgentRegistry>>,
     /// Conversation manager for all active chats.
     pub chat: Arc<RwLock<ChatManager>>,
+    /// Skill registry for all available capabilities.
+    pub skills: Arc<RwLock<SkillRegistry>>,
     /// Broadcast bus used for SSE event delivery.
     pub bus: Arc<MessageBus>,
     /// Immutable daemon configuration.
@@ -30,6 +32,7 @@ impl AppState {
         Self {
             registry: Arc::new(RwLock::new(AgentRegistry::new(Arc::clone(&bus)))),
             chat: Arc::new(RwLock::new(ChatManager::new(Arc::clone(&bus)))),
+            skills: Arc::new(RwLock::new(SkillRegistry::new(Arc::clone(&bus)))),
             bus,
             config: Arc::new(config),
         }

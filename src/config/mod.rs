@@ -1,27 +1,31 @@
 mod error;
-mod types;
+mod loader;
+pub mod types;
+mod validate;
+
+#[cfg(test)]
+mod test_helpers;
 
 pub use error::ConfigError;
-pub use types::{Config, DaemonConfig, LogFormat, LoggingConfig};
+pub use types::{
+    AgentsConfig, CodeToolsConfig, Config, DaemonConfig, LogFormat, LoggingConfig, McpConfig,
+    McpTransport, ServerConfig, StorageConfig,
+};
 
 impl Config {
     /// Load configuration, applying the layering order:
-    /// compiled defaults → user config → project config → env vars → CLI flags.
+    /// compiled defaults -> user config (`~/.trumpet/config.toml`) ->
+    /// project config (`./trumpet.toml`) -> env vars (`TRUMPET_*`).
     ///
-    /// For milestone 1 this returns compiled defaults only.
+    /// Paths that are `$HOME`-relative are resolved before returning.
     ///
     /// # Errors
     ///
     /// Returns [`ConfigError`] if a config file is present but cannot be parsed
-    /// or fails validation.
+    /// or the resulting config fails semantic validation.
     pub fn load() -> Result<Self, ConfigError> {
-        let mut config = Self::default();
-        let base = std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-            .join(".trumpet");
-        config.daemon.socket_path = base.join("trumpet.sock");
-        config.daemon.pid_file = base.join("trumpet.pid");
+        let config = loader::load_layered()?;
+        validate::validate(&config)?;
         Ok(config)
     }
 }
@@ -29,6 +33,11 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::test_helpers::{make_trumpet_dir, with_env, with_home};
+    use std::fs;
+    use tempfile::TempDir;
+
+    // ── defaults ─────────────────────────────────────────────────────────────
 
     #[test]
     fn default_socket_path_is_placeholder() {
@@ -36,7 +45,6 @@ mod tests {
         assert_eq!(
             config.daemon.socket_path,
             std::path::PathBuf::from("/tmp/trumpet/trumpet.sock"),
-            "default() must return static placeholder socket path"
         );
     }
 
@@ -46,7 +54,6 @@ mod tests {
         assert_eq!(
             config.daemon.pid_file,
             std::path::PathBuf::from("/tmp/trumpet/trumpet.pid"),
-            "default() must return static placeholder pid path"
         );
     }
 
@@ -56,31 +63,67 @@ mod tests {
         let serialized = toml::to_string(&original).expect("serialization must succeed");
         let deserialized: Config =
             toml::from_str(&serialized).expect("deserialization must succeed");
-        assert_eq!(
-            original, deserialized,
-            "round-trip produced a different Config"
-        );
+        assert_eq!(original, deserialized);
     }
+
+    // ── Config::load integration ─────────────────────────────────────────────
 
     #[test]
     fn load_resolves_paths_under_home() {
-        let config = Config::load().expect("Config::load must succeed");
-        assert!(
-            config.daemon.socket_path.ends_with("trumpet.sock"),
-            "load() socket_path must end with 'trumpet.sock', got {:?}",
-            config.daemon.socket_path,
-        );
-        assert!(
-            config
-                .daemon
-                .socket_path
-                .to_string_lossy()
-                .contains(".trumpet"),
-            "load() socket_path must be under .trumpet dir",
-        );
-        assert!(
-            config.daemon.pid_file.ends_with("trumpet.pid"),
-            "load() pid_file must end with 'trumpet.pid'",
-        );
+        let home = TempDir::new().unwrap();
+        make_trumpet_dir(&home);
+        with_home(&home, || {
+            let config = Config::load().expect("Config::load must succeed");
+            assert!(config.daemon.socket_path.ends_with("trumpet.sock"));
+            assert!(
+                config
+                    .daemon
+                    .socket_path
+                    .to_string_lossy()
+                    .contains(".trumpet"),
+            );
+            assert!(config.daemon.pid_file.ends_with("trumpet.pid"));
+        });
+    }
+
+    #[test]
+    fn load_end_to_end_with_file_env_and_validation() {
+        let home = TempDir::new().unwrap();
+        let trumpet_dir = make_trumpet_dir(&home);
+        fs::write(
+            trumpet_dir.join("config.toml"),
+            "[server]\nhttp_port = 8080\n",
+        )
+        .unwrap();
+        with_home(&home, || {
+            with_env("TRUMPET_SERVER_HTTP_PORT", "9999", || {
+                let config = Config::load().expect("Config::load must succeed");
+                assert_eq!(config.server.http_port, 9999, "env var must win over file");
+            });
+        });
+    }
+
+    // ── validation (via Config::load boundary) ───────────────────────────────
+
+    #[test]
+    fn validate_rejects_duplicate_ports() {
+        let mut config = Config::default();
+        config.server.http_port = 7600;
+        config.server.grpc_port = 7600;
+        let err = validate::validate(&config).expect_err("duplicate ports must fail");
+        assert!(err.to_string().contains("must differ"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_zero_port() {
+        let mut config = Config::default();
+        config.server.http_port = 0;
+        let err = validate::validate(&config).expect_err("port 0 must fail");
+        assert!(err.to_string().contains("http_port"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_valid_defaults() {
+        validate::validate(&Config::default()).expect("Config::default() must pass validation");
     }
 }
