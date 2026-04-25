@@ -1,8 +1,7 @@
 //! HTTP server for the Trumpet daemon.
 //!
-//! The server listens on a Unix domain socket and exposes a JSON REST API
-//! for agent management, conversation management, and a Server-Sent Events
-//! stream for real-time event delivery.
+//! The server listens on a Unix domain socket and exposes a JSON REST API,
+//! SSE, WebSocket, gRPC (A2A), and optionally an MCP stdio server.
 
 mod error;
 mod routes;
@@ -11,22 +10,24 @@ pub(crate) mod ws;
 
 pub use state::AppState;
 
+use std::sync::Arc;
+
 use tokio::net::UnixListener;
 use tracing::info;
 
 use crate::config::Config;
+use crate::core::code_tools::CodeTools;
+use crate::core::types::SkillProvider;
 use crate::error::Result;
+use crate::grpc::proto::a2a_service_server::A2aServiceServer;
+use crate::grpc::service::NexusA2aService;
 use crate::state::StateManager;
 
-/// Start the Trumpet daemon HTTP server.
+/// Start the Trumpet daemon.
 ///
-/// Binds a Unix domain socket at the path specified in `config.daemon.socket_path`,
-/// serves the REST API, and blocks until a shutdown signal (Ctrl-C) is received.
-/// The socket file is removed on both clean and error shutdown paths.
-///
-/// # Errors
-///
-/// Returns an error if the socket cannot be bound or if axum fails to serve.
+/// Binds a Unix domain socket for HTTP, starts gRPC on the configured TCP
+/// port, restores persisted state, registers built-in skills, spawns a
+/// periodic snapshot timer, and blocks until Ctrl-C.
 pub async fn serve(config: &Config) -> Result<()> {
     let socket_path = &config.daemon.socket_path;
 
@@ -57,16 +58,51 @@ pub async fn serve(config: &Config) -> Result<()> {
 
     info!("trumpet daemon listening on {}", socket_path.display());
 
-    let state_manager = StateManager::new(&config.storage).await?;
-
+    // ── State restore ────────────────────────────────────────────────────────
+    let state_manager = Arc::new(StateManager::new(&config.storage).await?);
     let state = AppState::new(config.clone());
 
-    // Restore persisted state if a snapshot exists.
     if let Some(snapshot) = state_manager.load_snapshot().await? {
         info!("restoring state from snapshot");
         state.restore_from_snapshot(snapshot).await;
     }
 
+    // ── Register built-in code tools as skills ───────────────────────────────
+    register_code_tools(&state, config).await;
+
+    // ── gRPC server ──────────────────────────────────────────────────────────
+    let grpc_addr = format!("{}:{}", config.server.host, config.server.grpc_port);
+    let grpc_service = NexusA2aService::new(state.clone());
+    let grpc_handle = tokio::spawn(async move {
+        info!(addr = %grpc_addr, "gRPC server starting");
+        if let Err(e) = tonic::transport::Server::builder()
+            .add_service(A2aServiceServer::new(grpc_service))
+            .serve(grpc_addr.parse().unwrap())
+            .await
+        {
+            tracing::error!(error = %e, "gRPC server failed");
+        }
+    });
+
+    // ── Periodic snapshot timer ──────────────────────────────────────────────
+    let snapshot_interval = config.storage.snapshot_interval_secs;
+    let snapshot_state = state.clone();
+    let snapshot_mgr = Arc::clone(&state_manager);
+    let snapshot_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(snapshot_interval));
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            let snap = snapshot_state.to_snapshot().await;
+            if let Err(e) = snapshot_mgr.save_snapshot(&snap).await {
+                tracing::error!(error = %e, "periodic snapshot failed");
+            } else {
+                tracing::debug!("periodic snapshot saved");
+            }
+        }
+    });
+
+    // ── HTTP server ──────────────────────────────────────────────────────────
     let app = routes::router(state.clone());
 
     axum::serve(listener, app)
@@ -76,24 +112,64 @@ pub async fn serve(config: &Config) -> Result<()> {
             reason: e.to_string(),
         })?;
 
-    // Snapshot state before exiting.
+    // ── Shutdown ─────────────────────────────────────────────────────────────
+    snapshot_handle.abort();
+    grpc_handle.abort();
+
     info!("saving state snapshot before shutdown");
     let snapshot = state.to_snapshot().await;
     if let Err(e) = state_manager.save_snapshot(&snapshot).await {
         tracing::error!(error = %e, "failed to save shutdown snapshot");
     }
 
-    // Best-effort socket cleanup after graceful shutdown.
     let _ = tokio::fs::remove_file(socket_path).await;
     info!("trumpet daemon stopped");
 
     Ok(())
 }
 
+/// Register built-in code intelligence skills in the skill registry.
+async fn register_code_tools(state: &AppState, config: &Config) {
+    let tools = CodeTools::new(config.code_tools.clone());
+    let mut skills = state.skills.write().await;
+
+    let code_skills = [
+        (
+            "code.scan_repo",
+            "Scan a directory tree and return file metadata with detected languages",
+        ),
+        (
+            "code.read_file",
+            "Read a file and return its content with language detection",
+        ),
+        (
+            "code.parse_file",
+            "Parse a source file with tree-sitter and return its code structure",
+        ),
+    ];
+
+    for (name, desc) in code_skills {
+        if let Err(e) = skills.register(
+            name,
+            desc,
+            serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+            serde_json::json!({"type": "object"}),
+            SkillProvider::BuiltIn,
+        ) {
+            tracing::warn!(skill = name, error = %e, "failed to register built-in skill");
+        }
+    }
+
+    // Store the CodeTools instance in AppState for later invocation.
+    drop(skills);
+    *state.code_tools.write().await = Some(tools);
+}
+
 /// Resolves when Ctrl-C is received.
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
-    info!("shutdown signal received");
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        tracing::error!(error = %e, "failed to install Ctrl+C handler");
+    } else {
+        info!("shutdown signal received");
+    }
 }

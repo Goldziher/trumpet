@@ -19,6 +19,22 @@ pub struct RegisterAgentArgs {
     pub name: String,
 }
 
+/// Arguments for the `deregister_agent` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeregisterAgentArgs {
+    /// UUID string of the agent to deregister.
+    pub agent_id: String,
+}
+
+/// Arguments for the `create_conversation` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CreateConversationArgs {
+    /// Optional display name for the conversation.
+    pub name: Option<String>,
+    /// UUID strings of agents participating in the conversation.
+    pub participants: Vec<String>,
+}
+
 /// Arguments for the `send_message` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SendMessageArgs {
@@ -80,9 +96,57 @@ impl TrumpetMcpServer {
             let mut registry = self.state.registry.write().await;
             registry
                 .register(&args.name)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?
         };
         let json = serde_json::to_string(&info)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Deregister an agent by ID.
+    #[tool(description = "Deregister an agent from the Trumpet nexus.")]
+    async fn deregister_agent(
+        &self,
+        Parameters(args): Parameters<DeregisterAgentArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let agent_id = args
+            .agent_id
+            .parse::<crate::core::types::AgentId>()
+            .map_err(|e| McpError::invalid_params(format!("invalid agent_id: {e}"), None))?;
+
+        let info = {
+            let mut registry = self.state.registry.write().await;
+            registry
+                .deregister(&agent_id)
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?
+        };
+        let json = serde_json::to_string(&info)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Create a new conversation between agents.
+    #[tool(description = "Create a new conversation with the specified participants.")]
+    async fn create_conversation(
+        &self,
+        Parameters(args): Parameters<CreateConversationArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let participants: Vec<crate::core::types::AgentId> = args
+            .participants
+            .iter()
+            .map(|s| {
+                s.parse::<crate::core::types::AgentId>().map_err(|e| {
+                    McpError::invalid_params(format!("invalid agent_id '{s}': {e}"), None)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let conv = {
+            let mut chat = self.state.chat.write().await;
+            chat.create_conversation(args.name, participants)
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?
+        };
+        let json = serde_json::to_string(&conv)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -118,17 +182,17 @@ impl TrumpetMcpServer {
         let conversation_id = args
             .conversation_id
             .parse::<crate::core::types::ConversationId>()
-            .map_err(|e| McpError::internal_error(format!("invalid conversation_id: {e}"), None))?;
+            .map_err(|e| McpError::invalid_params(format!("invalid conversation_id: {e}"), None))?;
 
         let sender = args
             .sender_agent_id
             .parse::<crate::core::types::AgentId>()
-            .map_err(|e| McpError::internal_error(format!("invalid sender_agent_id: {e}"), None))?;
+            .map_err(|e| McpError::invalid_params(format!("invalid sender_agent_id: {e}"), None))?;
 
         let msg = {
             let mut chat = self.state.chat.write().await;
             chat.send_message(&conversation_id, sender, args.content)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?
         };
 
         let json = serde_json::to_string(&msg)
@@ -145,12 +209,12 @@ impl TrumpetMcpServer {
         let conversation_id = args
             .conversation_id
             .parse::<crate::core::types::ConversationId>()
-            .map_err(|e| McpError::internal_error(format!("invalid conversation_id: {e}"), None))?;
+            .map_err(|e| McpError::invalid_params(format!("invalid conversation_id: {e}"), None))?;
 
         let chat = self.state.chat.read().await;
         let messages = chat
             .get_messages(&conversation_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let json = serde_json::to_string(messages)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;

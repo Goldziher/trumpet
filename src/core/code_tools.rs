@@ -146,8 +146,9 @@ impl CodeTools {
     /// blocking task panics.
     pub async fn read_file(&self, path: &str) -> Result<ReadResult, Error> {
         let path = path.to_owned();
+        let max_size = self.config.max_file_size_bytes;
 
-        tokio::task::spawn_blocking(move || read_file_blocking(&path))
+        tokio::task::spawn_blocking(move || read_file_blocking(&path, max_size))
             .await
             .map_err(|e| Error::InternalUnexpected {
                 reason: format!("read_file task panicked: {e}"),
@@ -213,18 +214,27 @@ fn visit_dir(
             reason: format!("directory entry error in '{}': {e}", dir.display()),
         })?;
         let entry_path = entry.path();
-        let metadata = entry.metadata().map_err(|e| Error::InternalUnexpected {
-            reason: format!("cannot stat '{}': {e}", entry_path.display()),
-        })?;
 
-        if metadata.is_dir() {
+        // Use symlink_metadata to avoid following symlinks (prevents loops).
+        let sym_meta =
+            std::fs::symlink_metadata(&entry_path).map_err(|e| Error::InternalUnexpected {
+                reason: format!("cannot stat '{}': {e}", entry_path.display()),
+            })?;
+
+        if sym_meta.file_type().is_symlink() {
+            continue;
+        }
+
+        if sym_meta.is_dir() {
             visit_dir(&entry_path, max_size, max_files, out, total)?;
             continue;
         }
 
-        if !metadata.is_file() {
+        if !sym_meta.is_file() {
             continue;
         }
+
+        let metadata = sym_meta;
 
         let size_bytes = metadata.len();
         if size_bytes > max_size {
@@ -266,7 +276,18 @@ fn visit_dir(
     Ok(())
 }
 
-fn read_file_blocking(path: &str) -> Result<ReadResult, Error> {
+fn read_file_blocking(path: &str, max_size: u64) -> Result<ReadResult, Error> {
+    let meta = std::fs::metadata(path).map_err(|e| Error::InternalUnexpected {
+        reason: format!("cannot stat file '{path}': {e}"),
+    })?;
+    if meta.len() > max_size {
+        return Err(Error::InternalUnexpected {
+            reason: format!(
+                "file '{path}' exceeds max_file_size_bytes ({} > {max_size})",
+                meta.len()
+            ),
+        });
+    }
     let bytes = std::fs::read(path).map_err(|e| Error::InternalUnexpected {
         reason: format!("cannot read file '{path}': {e}"),
     })?;

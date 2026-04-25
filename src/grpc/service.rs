@@ -15,7 +15,7 @@ use crate::server::AppState;
 /// Trumpet's implementation of the A2A protocol service.
 #[derive(Clone)]
 pub struct NexusA2aService {
-    #[expect(dead_code, reason = "used when RPC methods are implemented")]
+    #[expect(dead_code, reason = "RPCs are stubs; state used when implemented")]
     state: AppState,
 }
 

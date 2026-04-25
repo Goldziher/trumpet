@@ -17,14 +17,21 @@ enum Cli {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    // CLI commands that don't run the daemon use a basic stderr logger.
+    // `trumpet serve` re-initializes tracing from config (level + format).
+    let cli = Cli::parse();
+    let is_serve = matches!(cli, Cli::Serve);
 
-    let result = match Cli::parse() {
+    if !is_serve {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .init();
+    }
+
+    let result = match cli {
         Cli::Serve => trumpet::cli::run_serve().await,
         Cli::Start => trumpet::cli::run_start().await,
         Cli::Stop => trumpet::cli::run_stop().await,

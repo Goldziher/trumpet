@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::Config;
+use crate::core::code_tools::CodeTools;
 use crate::core::{AgentRegistry, ChatManager, MessageBus, SkillRegistry};
 
 /// Cloneable handle to shared daemon state.
@@ -21,6 +22,8 @@ pub struct AppState {
     pub skills: Arc<RwLock<SkillRegistry>>,
     /// Broadcast bus used for SSE event delivery.
     pub bus: Arc<MessageBus>,
+    /// Built-in code intelligence tools (populated after startup).
+    pub code_tools: Arc<RwLock<Option<CodeTools>>>,
     /// Immutable daemon configuration.
     pub config: Arc<Config>,
 }
@@ -34,6 +37,7 @@ impl AppState {
             chat: Arc::new(RwLock::new(ChatManager::new(Arc::clone(&bus)))),
             skills: Arc::new(RwLock::new(SkillRegistry::new(Arc::clone(&bus)))),
             bus,
+            code_tools: Arc::new(RwLock::new(None)),
             config: Arc::new(config),
         }
     }
