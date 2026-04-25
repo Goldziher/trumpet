@@ -6,7 +6,9 @@ use tokio::sync::RwLock;
 
 use crate::config::Config;
 use crate::core::code_tools::CodeTools;
-use crate::core::{AgentRegistry, ChatManager, MessageBus, TaskManager, ToolRegistry};
+use crate::core::{
+    AgentRegistry, ChatManager, MessageBus, PushNotificationStore, TaskManager, ToolRegistry,
+};
 
 /// Cloneable handle to shared daemon state.
 ///
@@ -22,6 +24,8 @@ pub struct AppState {
     pub tools: Arc<RwLock<ToolRegistry>>,
     /// Task manager for A2A task lifecycle.
     pub tasks: Arc<RwLock<TaskManager>>,
+    /// Webhook subscriptions for task lifecycle events.
+    pub push_notifications: Arc<RwLock<PushNotificationStore>>,
     /// Broadcast bus used for SSE event delivery.
     pub bus: Arc<MessageBus>,
     /// Built-in code intelligence tools (populated after startup).
@@ -39,6 +43,7 @@ impl AppState {
             chat: Arc::new(RwLock::new(ChatManager::new(Arc::clone(&bus)))),
             tools: Arc::new(RwLock::new(ToolRegistry::new(Arc::clone(&bus)))),
             tasks: Arc::new(RwLock::new(TaskManager::new(Arc::clone(&bus)))),
+            push_notifications: Arc::new(RwLock::new(PushNotificationStore::new())),
             bus,
             code_tools: Arc::new(RwLock::new(None)),
             config: Arc::new(config),
@@ -51,6 +56,7 @@ impl AppState {
         let chat = self.chat.read().await;
         let tools = self.tools.read().await;
         let task_mgr = self.tasks.read().await;
+        let push = self.push_notifications.read().await;
 
         let agents = registry.list().into_iter().cloned().collect();
         let tool_list = tools.list().into_iter().cloned().collect();
@@ -71,6 +77,7 @@ impl AppState {
             conversations,
             messages,
             tasks,
+            push_notifications: push.all(),
         }
     }
 
@@ -82,10 +89,12 @@ impl AppState {
         let mut chat = self.chat.write().await;
         let mut tools = self.tools.write().await;
         let mut task_mgr = self.tasks.write().await;
+        let mut push = self.push_notifications.write().await;
 
         registry.restore(snapshot.agents);
         tools.restore(snapshot.tools);
         chat.restore(snapshot.conversations, snapshot.messages);
         task_mgr.restore(snapshot.tasks);
+        push.restore(snapshot.push_notifications);
     }
 }

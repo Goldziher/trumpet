@@ -167,6 +167,7 @@ mod tests {
             conversations: vec![],
             messages: vec![],
             tasks: vec![],
+            push_notifications: vec![],
         }
     }
 
@@ -209,6 +210,7 @@ mod tests {
             conversations: vec![conv],
             messages: vec![(conv_id, vec![msg])],
             tasks: vec![],
+            push_notifications: vec![],
         };
 
         (snapshot, agent_id, conv_id)
@@ -266,6 +268,7 @@ mod tests {
             conversations: vec![],
             messages: vec![],
             tasks: vec![],
+            push_notifications: vec![],
         };
         manager.save_snapshot(&second).await.unwrap();
 

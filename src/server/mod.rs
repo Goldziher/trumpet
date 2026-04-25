@@ -158,6 +158,18 @@ pub async fn serve(config: &Config) -> Result<()> {
         None
     };
 
+    // ── Push notification delivery worker ────────────────────────────────────
+    let webhook_client = reqwest::Client::builder().build().map_err(|e| {
+        crate::error::Error::InternalUnexpected {
+            reason: format!("failed to build webhook HTTP client: {e}"),
+        }
+    })?;
+    let push_handle = crate::core::push_notifications::spawn_delivery_worker(
+        Arc::clone(&state.push_notifications),
+        Arc::clone(&state.bus),
+        webhook_client,
+    );
+
     // ── Periodic snapshot timer ──────────────────────────────────────────────
     let snapshot_interval = config.storage.snapshot_interval_secs;
     let snapshot_state = state.clone();
@@ -189,6 +201,7 @@ pub async fn serve(config: &Config) -> Result<()> {
     // ── Shutdown ─────────────────────────────────────────────────────────────
     snapshot_handle.abort();
     grpc_handle.abort();
+    push_handle.abort();
     if let Some(handle) = mcp_handle {
         handle.abort();
     }

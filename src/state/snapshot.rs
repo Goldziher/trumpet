@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::PushNotificationConfig;
 use crate::core::task_types::Task;
 use crate::core::types::{AgentInfo, ChatMessage, Conversation, ConversationId, ToolInfo};
 
@@ -26,6 +27,9 @@ pub struct StateSnapshot {
     /// All tasks at the time of the snapshot.
     #[serde(default)]
     pub tasks: Vec<Task>,
+    /// All registered push-notification webhook configurations.
+    #[serde(default)]
+    pub push_notifications: Vec<PushNotificationConfig>,
 }
 
 #[cfg(test)]
@@ -92,6 +96,7 @@ mod tests {
             conversations: vec![conv.clone()],
             messages: vec![(conv.id, vec![msg1.clone(), msg2.clone()])],
             tasks: vec![],
+            push_notifications: vec![],
         };
 
         let encoded = rmp_serde::to_vec(&original).expect("MessagePack encoding must succeed");

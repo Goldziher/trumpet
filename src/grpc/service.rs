@@ -12,7 +12,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::core::task_types::{ContextId, TaskId};
-use crate::core::{DefaultTaskRouter, Event, TaskFacade, TaskFilter};
+use crate::core::{
+    DefaultTaskRouter, Event, PushNotificationAuth, PushNotificationId, TaskFacade, TaskFilter,
+};
 use crate::grpc::convert;
 use crate::grpc::proto;
 use crate::server::AppState;
@@ -333,28 +335,83 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
 
     async fn create_task_push_notification_config(
         &self,
-        _request: Request<proto::TaskPushNotificationConfig>,
+        request: Request<proto::TaskPushNotificationConfig>,
     ) -> Result<Response<proto::TaskPushNotificationConfig>, Status> {
-        Err(Status::unimplemented(
-            "create_task_push_notification_config not yet implemented",
-        ))
+        let req = request.into_inner();
+        let task_id: TaskId = req
+            .task_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid task id"))?;
+
+        // Verify the task exists before registering a webhook against it.
+        let facade = self.make_facade();
+        facade
+            .get_task(&task_id)
+            .await
+            .map_err(|e| Status::not_found(e.to_string()))?;
+
+        let auth = req.authentication.as_ref().map(|a| PushNotificationAuth {
+            scheme: a.scheme.clone(),
+            credentials: a.credentials.clone(),
+        });
+
+        let mut store = self.state.push_notifications.write().await;
+        let cfg = store
+            .create(task_id, req.url.clone(), req.token.clone(), auth)
+            .map_err(|e| match e {
+                crate::error::Error::InvalidInput { reason } => Status::invalid_argument(reason),
+                other => Status::internal(other.to_string()),
+            })?;
+
+        Ok(Response::new(push_config_to_proto(&cfg)))
     }
 
     async fn get_task_push_notification_config(
         &self,
-        _request: Request<proto::GetTaskPushNotificationConfigRequest>,
+        request: Request<proto::GetTaskPushNotificationConfigRequest>,
     ) -> Result<Response<proto::TaskPushNotificationConfig>, Status> {
-        Err(Status::unimplemented(
-            "get_task_push_notification_config not yet implemented",
-        ))
+        let req = request.into_inner();
+        let task_id: TaskId = req
+            .task_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid task id"))?;
+        let cfg_id: PushNotificationId = req
+            .id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid push notification config id"))?;
+
+        let store = self.state.push_notifications.read().await;
+        let cfg = store
+            .get(&task_id, &cfg_id)
+            .ok_or_else(|| Status::not_found("push notification config not found"))?;
+
+        Ok(Response::new(push_config_to_proto(cfg)))
     }
 
     async fn list_task_push_notification_configs(
         &self,
-        _request: Request<proto::ListTaskPushNotificationConfigsRequest>,
+        request: Request<proto::ListTaskPushNotificationConfigsRequest>,
     ) -> Result<Response<proto::ListTaskPushNotificationConfigsResponse>, Status> {
-        Err(Status::unimplemented(
-            "list_task_push_notification_configs not yet implemented",
+        let req = request.into_inner();
+        let task_id: TaskId = req
+            .task_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid task id"))?;
+
+        let store = self.state.push_notifications.read().await;
+        let configs: Vec<proto::TaskPushNotificationConfig> = store
+            .list(&task_id)
+            .iter()
+            .map(push_config_to_proto)
+            .collect();
+
+        Ok(Response::new(
+            proto::ListTaskPushNotificationConfigsResponse {
+                configs,
+                // No pagination yet — push-notification config lists are typically
+                // very small per task.
+                next_page_token: String::new(),
+            },
         ))
     }
 
@@ -397,7 +454,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             documentation_url: None,
             capabilities: Some(proto::AgentCapabilities {
                 streaming: Some(true),
-                push_notifications: Some(false),
+                push_notifications: Some(true),
                 extensions: vec![],
                 extended_agent_card: Some(true),
             }),
@@ -415,11 +472,45 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
 
     async fn delete_task_push_notification_config(
         &self,
-        _request: Request<proto::DeleteTaskPushNotificationConfigRequest>,
+        request: Request<proto::DeleteTaskPushNotificationConfigRequest>,
     ) -> Result<Response<()>, Status> {
-        Err(Status::unimplemented(
-            "delete_task_push_notification_config not yet implemented",
-        ))
+        let req = request.into_inner();
+        let task_id: TaskId = req
+            .task_id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid task id"))?;
+        let cfg_id: PushNotificationId = req
+            .id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid push notification config id"))?;
+
+        let mut store = self.state.push_notifications.write().await;
+        if store.delete(&task_id, &cfg_id) {
+            Ok(Response::new(()))
+        } else {
+            Err(Status::not_found("push notification config not found"))
+        }
+    }
+}
+
+/// Convert a core [`crate::core::PushNotificationConfig`] to the proto
+/// wire type used by the four push-notification RPCs.
+fn push_config_to_proto(
+    cfg: &crate::core::PushNotificationConfig,
+) -> proto::TaskPushNotificationConfig {
+    proto::TaskPushNotificationConfig {
+        tenant: String::new(),
+        id: cfg.id.to_string(),
+        task_id: cfg.task_id.to_string(),
+        url: cfg.url.clone(),
+        token: cfg.token.clone(),
+        authentication: cfg
+            .authentication
+            .as_ref()
+            .map(|a| proto::AuthenticationInfo {
+                scheme: a.scheme.clone(),
+                credentials: a.credentials.clone(),
+            }),
     }
 }
 
@@ -602,6 +693,103 @@ mod tests {
             page3.next_page_token.is_empty(),
             "next_page_token must be empty on the last page"
         );
+    }
+
+    // ── push notifications ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn push_notification_create_and_list_round_trip() {
+        let svc = make_service();
+
+        // Create a task first.
+        let send_resp = proto::a2a_service_server::A2aService::send_message(
+            &svc,
+            Request::new(proto::SendMessageRequest {
+                message: Some(text_message()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("send must succeed");
+        let task_id = match send_resp.into_inner().payload {
+            Some(proto::send_message_response::Payload::Task(t)) => t.id,
+            other => panic!("expected Task, got: {other:?}"),
+        };
+
+        // Register two webhooks.
+        for url in ["https://hook-a.example/", "https://hook-b.example/"] {
+            proto::a2a_service_server::A2aService::create_task_push_notification_config(
+                &svc,
+                Request::new(proto::TaskPushNotificationConfig {
+                    task_id: task_id.clone(),
+                    url: url.to_owned(),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("create push config must succeed");
+        }
+
+        // List.
+        let listed = proto::a2a_service_server::A2aService::list_task_push_notification_configs(
+            &svc,
+            Request::new(proto::ListTaskPushNotificationConfigsRequest {
+                task_id: task_id.clone(),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("list must succeed")
+        .into_inner();
+        assert_eq!(listed.configs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn push_notification_create_rejects_invalid_url() {
+        let svc = make_service();
+
+        // Create a task to attach to.
+        let send_resp = proto::a2a_service_server::A2aService::send_message(
+            &svc,
+            Request::new(proto::SendMessageRequest {
+                message: Some(text_message()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("send must succeed");
+        let task_id = match send_resp.into_inner().payload {
+            Some(proto::send_message_response::Payload::Task(t)) => t.id,
+            other => panic!("expected Task, got: {other:?}"),
+        };
+
+        let result = proto::a2a_service_server::A2aService::create_task_push_notification_config(
+            &svc,
+            Request::new(proto::TaskPushNotificationConfig {
+                task_id,
+                url: "not-a-valid-url".to_owned(),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let err = result.expect_err("invalid url must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn push_notification_get_unknown_returns_not_found() {
+        let svc = make_service();
+        let result = proto::a2a_service_server::A2aService::get_task_push_notification_config(
+            &svc,
+            Request::new(proto::GetTaskPushNotificationConfigRequest {
+                task_id: uuid::Uuid::new_v4().to_string(),
+                id: uuid::Uuid::new_v4().to_string(),
+                ..Default::default()
+            }),
+        )
+        .await;
+        let err = result.expect_err("unknown config must return error");
+        assert_eq!(err.code(), tonic::Code::NotFound);
     }
 
     // ── streaming ──────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@
 pub mod bus;
 pub mod chat;
 pub mod code_tools;
+pub mod push_notifications;
 pub mod registry;
 pub mod router;
 pub mod task_facade;
@@ -18,6 +19,9 @@ pub mod types;
 
 pub use bus::{Event, MessageBus};
 pub use chat::ChatManager;
+pub use push_notifications::{
+    PushNotificationAuth, PushNotificationConfig, PushNotificationId, PushNotificationStore,
+};
 pub use registry::AgentRegistry;
 pub use router::{DefaultTaskRouter, TaskRouter};
 pub use task_facade::TaskFacade;
