@@ -199,6 +199,40 @@ impl TaskState {
     }
 }
 
+impl std::fmt::Display for TaskState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Submitted => "submitted",
+            Self::Working => "working",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+            Self::InputRequired => "input_required",
+            Self::AuthRequired => "auth_required",
+            Self::Rejected => "rejected",
+        };
+        f.write_str(s)
+    }
+}
+
+impl std::str::FromStr for TaskState {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "submitted" => Ok(Self::Submitted),
+            "working" => Ok(Self::Working),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "canceled" => Ok(Self::Canceled),
+            "input_required" => Ok(Self::InputRequired),
+            "rejected" => Ok(Self::Rejected),
+            "auth_required" => Ok(Self::AuthRequired),
+            _ => Err(format!("unknown task state: '{s}'")),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Message types
 // ---------------------------------------------------------------------------

@@ -75,12 +75,19 @@ pub async fn serve(config: &Config) -> Result<()> {
 
     // ── gRPC server ──────────────────────────────────────────────────────────
     let grpc_addr = format!("{}:{}", config.server.host, config.server.grpc_port);
+    let grpc_socket_addr: std::net::SocketAddr =
+        grpc_addr
+            .parse()
+            .map_err(|e| crate::error::Error::DaemonBindFailed {
+                path: grpc_addr.clone(),
+                reason: format!("invalid gRPC listen address: {e}"),
+            })?;
     let grpc_service = NexusA2aService::new(state.clone());
     let grpc_handle = tokio::spawn(async move {
-        info!(addr = %grpc_addr, "gRPC server starting");
+        info!(addr = %grpc_socket_addr, "gRPC server starting");
         if let Err(e) = tonic::transport::Server::builder()
             .add_service(A2aServiceServer::new(grpc_service))
-            .serve(grpc_addr.parse().unwrap())
+            .serve(grpc_socket_addr)
             .await
         {
             tracing::error!(error = %e, "gRPC server failed");

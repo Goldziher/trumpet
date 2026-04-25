@@ -28,6 +28,9 @@ use super::ws;
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
     pub name: String,
+    /// Optional agent capabilities (ADR-015).
+    #[serde(default)]
+    pub capabilities: Option<crate::core::AgentCapabilities>,
 }
 
 /// Request body for agent deregistration.
@@ -52,7 +55,7 @@ pub struct SendMessageRequest {
 
 /// Request body for invoking a tool.
 #[derive(Debug, Deserialize)]
-pub(crate) struct InvokeToolRequest {
+pub struct InvokeToolRequest {
     /// The JSON payload to pass to the tool.
     pub input: serde_json::Value,
 }
@@ -100,7 +103,7 @@ async fn register_agent(
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<AgentInfo>> {
     let mut registry = state.registry.write().await;
-    let info = registry.register(&req.name, None)?;
+    let info = registry.register(&req.name, req.capabilities)?;
     Ok(Json(info))
 }
 
@@ -129,6 +132,13 @@ async fn create_conversation(
     let mut chat = state.chat.write().await;
     let conv = chat.create_conversation(req.name, req.participants)?;
     Ok(Json(conv))
+}
+
+/// GET /conversations — list all conversations.
+async fn list_conversations(State(state): State<AppState>) -> Json<Vec<Conversation>> {
+    let chat = state.chat.read().await;
+    let convs: Vec<Conversation> = chat.list_conversations().into_iter().cloned().collect();
+    Json(convs)
 }
 
 /// GET /conversations/{id} — fetch a single conversation.
@@ -232,7 +242,9 @@ async fn submit_task(
         .as_deref()
         .map(|s| {
             s.parse::<ContextId>()
-                .map_err(|_| Error::TaskNotFound { id: s.to_owned() })
+                .map_err(|_| Error::ConfigValidationFailed {
+                    reason: format!("invalid context_id UUID: '{s}'"),
+                })
         })
         .transpose()?;
 
@@ -241,7 +253,9 @@ async fn submit_task(
         .as_deref()
         .map(|s| {
             s.parse::<AgentId>()
-                .map_err(|_| Error::AgentNotFound { name: s.to_owned() })
+                .map_err(|_| Error::ConfigValidationFailed {
+                    reason: format!("invalid assignee UUID: '{s}'"),
+                })
         })
         .transpose()?;
 
@@ -282,7 +296,9 @@ async fn list_tasks_handler(
         .as_deref()
         .map(|s| {
             s.parse::<ContextId>()
-                .map_err(|_| Error::TaskNotFound { id: s.to_owned() })
+                .map_err(|_| Error::ConfigValidationFailed {
+                    reason: format!("invalid context_id UUID: '{s}'"),
+                })
         })
         .transpose()?;
 
@@ -290,11 +306,10 @@ async fn list_tasks_handler(
         .state
         .as_deref()
         .map(|s| {
-            serde_json::from_str::<TaskState>(&format!("\"{s}\"")).map_err(|_| {
-                Error::ConfigValidationFailed {
+            s.parse::<TaskState>()
+                .map_err(|_| Error::ConfigValidationFailed {
                     reason: format!("'{s}' is not a valid task state"),
-                }
-            })
+                })
         })
         .transpose()?;
 
@@ -303,7 +318,9 @@ async fn list_tasks_handler(
         .as_deref()
         .map(|s| {
             s.parse::<AgentId>()
-                .map_err(|_| Error::AgentNotFound { name: s.to_owned() })
+                .map_err(|_| Error::ConfigValidationFailed {
+                    reason: format!("invalid assignee UUID: '{s}'"),
+                })
         })
         .transpose()?;
 
@@ -368,7 +385,10 @@ pub fn router(state: AppState) -> Router {
         .route("/agents", get(list_agents))
         .route("/agents/register", post(register_agent))
         .route("/agents/deregister", post(deregister_agent))
-        .route("/conversations", post(create_conversation))
+        .route(
+            "/conversations",
+            post(create_conversation).get(list_conversations),
+        )
         .route("/conversations/{id}", get(get_conversation))
         .route(
             "/conversations/{id}/messages",

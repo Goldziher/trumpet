@@ -301,7 +301,7 @@ impl TrumpetMcpServer {
         let task = facade
             .submit_task(message, context_id, assignee, None)
             .await
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let json = serde_json::to_string(&task)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
@@ -324,10 +324,12 @@ impl TrumpetMcpServer {
             std::sync::Arc::clone(&self.state.registry),
             Box::new(crate::core::DefaultTaskRouter),
         );
-        let task = facade
-            .get_task(&task_id)
-            .await
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        let task = facade.get_task(&task_id).await.map_err(|e| match &e {
+            crate::error::Error::TaskNotFound { .. } => {
+                McpError::invalid_params(e.to_string(), None)
+            }
+            _ => McpError::internal_error(e.to_string(), None),
+        })?;
 
         let json = serde_json::to_string(&task)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
@@ -353,7 +355,7 @@ impl TrumpetMcpServer {
             .state
             .as_deref()
             .map(|s| {
-                serde_json::from_str::<crate::core::TaskState>(&format!("\"{s}\""))
+                s.parse::<crate::core::TaskState>()
                     .map_err(|_| McpError::invalid_params(format!("invalid state: '{s}'"), None))
             })
             .transpose()?;
@@ -403,7 +405,12 @@ impl TrumpetMcpServer {
         let task = facade
             .cancel_task(&task_id, None)
             .await
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+            .map_err(|e| match &e {
+                crate::error::Error::TaskNotFound { .. } => {
+                    McpError::invalid_params(e.to_string(), None)
+                }
+                _ => McpError::internal_error(e.to_string(), None),
+            })?;
 
         let json = serde_json::to_string(&task)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;

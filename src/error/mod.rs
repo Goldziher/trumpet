@@ -25,10 +25,6 @@ pub enum Error {
     #[error("daemon is already running (pid {pid})")]
     DaemonAlreadyRunning { pid: u32 },
 
-    /// A stale socket exists at `path` left behind by a dead process.
-    #[error("stale daemon socket at '{path}' (was pid {pid})")]
-    DaemonStaleSocket { path: String, pid: u32 },
-
     /// The daemon could not bind to its socket.
     #[error("daemon failed to bind socket at '{path}': {reason}")]
     DaemonBindFailed { path: String, reason: String },
@@ -101,10 +97,6 @@ pub enum Error {
     #[error("tool invocation failed for '{name}': {reason}")]
     ToolInvocationFailed { name: String, reason: String },
 
-    /// Tool invocation not yet implemented.
-    #[error("tool invocation not yet implemented for '{name}'")]
-    ToolNotImplemented { name: String },
-
     /// The agent providing the tool is not connected.
     #[error("tool provider unavailable for '{name}'")]
     ToolProviderUnavailable { name: String },
@@ -125,10 +117,6 @@ pub enum Error {
     /// The task is already in a terminal state.
     #[error("task '{task_id}' is already terminal ({state})")]
     TaskAlreadyTerminal { task_id: String, state: String },
-
-    /// No suitable agent was found to handle the task.
-    #[error("no agent available to handle task '{task_id}'")]
-    TaskRoutingFailed { task_id: String },
 
     // ── State ─────────────────────────────────────────────────────────────────
     /// Writing a state snapshot to persistent storage failed.
@@ -171,7 +159,6 @@ impl ErrorCode for Error {
         match self {
             Self::DaemonNotRunning => "DAEMON_NOT_RUNNING",
             Self::DaemonAlreadyRunning { .. } => "DAEMON_ALREADY_RUNNING",
-            Self::DaemonStaleSocket { .. } => "DAEMON_STALE_SOCKET",
             Self::DaemonBindFailed { .. } => "DAEMON_BIND_FAILED",
             Self::DaemonShutdownFailed { .. } => "DAEMON_SHUTDOWN_FAILED",
             Self::ConnectionRefused => "CONNECTION_REFUSED",
@@ -189,12 +176,10 @@ impl ErrorCode for Error {
             Self::ToolInvalidName { .. } => "TOOL_INVALID_NAME",
             Self::ToolInvalidDescription { .. } => "TOOL_INVALID_DESCRIPTION",
             Self::ToolInvocationFailed { .. } => "TOOL_INVOCATION_FAILED",
-            Self::ToolNotImplemented { .. } => "TOOL_NOT_IMPLEMENTED",
             Self::ToolProviderUnavailable { .. } => "TOOL_PROVIDER_UNAVAILABLE",
             Self::TaskNotFound { .. } => "TASK_NOT_FOUND",
             Self::TaskInvalidTransition { .. } => "TASK_INVALID_TRANSITION",
             Self::TaskAlreadyTerminal { .. } => "TASK_ALREADY_TERMINAL",
-            Self::TaskRoutingFailed { .. } => "TASK_ROUTING_FAILED",
             Self::StateSnapshotFailed { .. } => "STATE_SNAPSHOT_FAILED",
             Self::StateRestoreFailed { .. } => "STATE_RESTORE_FAILED",
             Self::ConfigInvalidToml { .. } => "CONFIG_INVALID_TOML",
@@ -213,8 +198,7 @@ impl ErrorCode for Error {
             | Self::ToolProviderUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::DaemonAlreadyRunning { .. }
             | Self::AgentAlreadyRegistered { .. }
-            | Self::ToolAlreadyRegistered { .. }
-            | Self::DaemonStaleSocket { .. } => StatusCode::CONFLICT,
+            | Self::ToolAlreadyRegistered { .. } => StatusCode::CONFLICT,
             Self::DaemonBindFailed { .. }
             | Self::ConnectionRefused
             | Self::ConnectionTimeout { .. }
@@ -225,13 +209,11 @@ impl ErrorCode for Error {
             Self::TaskAlreadyTerminal { .. } => StatusCode::CONFLICT,
             Self::TaskNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TaskInvalidTransition { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::TaskRoutingFailed { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::AgentNotFound { .. }
             | Self::ConversationNotFound { .. }
             | Self::ToolNotFound { .. }
             | Self::ToolNotFoundById { .. }
             | Self::ConfigMissingDir { .. } => StatusCode::NOT_FOUND,
-            Self::ToolNotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
             Self::AgentInvalidName { .. }
             | Self::ToolInvalidName { .. }
             | Self::ToolInvalidDescription { .. }
@@ -253,9 +235,6 @@ impl ErrorCode for Error {
             }
             Self::DaemonAlreadyRunning { pid } => {
                 format!("stop the running daemon first: `trumpet stop` (pid {pid})")
-            }
-            Self::DaemonStaleSocket { path, .. } => {
-                format!("remove the stale socket and restart: `rm {path} && trumpet start`")
             }
             Self::DaemonBindFailed { path, .. } => {
                 format!("check that '{path}' is writable and no other process holds the socket")
@@ -311,9 +290,6 @@ impl ErrorCode for Error {
             Self::ToolInvocationFailed { name, reason } => {
                 format!("tool '{name}' failed to execute: {reason}")
             }
-            Self::ToolNotImplemented { .. } => {
-                "tool invocation is not yet implemented".to_owned()
-            }
             Self::ToolProviderUnavailable { name } => {
                 format!("the agent providing tool '{name}' is not currently connected; check agent status")
             }
@@ -325,10 +301,6 @@ impl ErrorCode for Error {
             }
             Self::TaskAlreadyTerminal { state, .. } => {
                 format!("task is in terminal state {state} and cannot be modified")
-            }
-            Self::TaskRoutingFailed { .. } => {
-                "no connected agent can handle this task; register an agent or assign explicitly"
-                    .to_owned()
             }
             Self::StateSnapshotFailed { reason } => {
                 format!("snapshot write failed: {reason}; check storage path permissions and disk space")
@@ -396,10 +368,6 @@ mod tests {
         vec![
             Error::DaemonNotRunning,
             Error::DaemonAlreadyRunning { pid: 1234 },
-            Error::DaemonStaleSocket {
-                path: "/tmp/trumpet.sock".to_owned(),
-                pid: 5678,
-            },
             Error::DaemonBindFailed {
                 path: "/tmp/trumpet.sock".to_owned(),
                 reason: "address in use".to_owned(),
@@ -453,9 +421,6 @@ mod tests {
                 name: "scan".to_owned(),
                 reason: "timeout".to_owned(),
             },
-            Error::ToolNotImplemented {
-                name: "scan".to_owned(),
-            },
             Error::ToolProviderUnavailable {
                 name: "scan".to_owned(),
             },
@@ -470,9 +435,6 @@ mod tests {
             Error::TaskAlreadyTerminal {
                 task_id: "abc".to_owned(),
                 state: "completed".to_owned(),
-            },
-            Error::TaskRoutingFailed {
-                task_id: "abc".to_owned(),
             },
             Error::StateSnapshotFailed {
                 reason: "disk full".to_owned(),

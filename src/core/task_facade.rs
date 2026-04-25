@@ -12,7 +12,7 @@ use crate::core::registry::AgentRegistry;
 use crate::core::router::TaskRouter;
 use crate::core::task_manager::{TaskEvent, TaskManager};
 use crate::core::task_types::{
-    Artifact, ContextId, Task, TaskFilter, TaskId, TaskMessage, TaskState,
+    Artifact, ContextId, Task, TaskFilter, TaskId, TaskMessage, TaskState, TaskStatus,
 };
 use crate::core::types::AgentId;
 use crate::error::Error;
@@ -43,6 +43,9 @@ impl TaskFacade {
     }
 
     /// Submit a new task. Routes to an available agent if possible.
+    ///
+    /// Routing is resolved before task creation so the assignee is set
+    /// atomically — no window where the task exists without an assignee.
     pub async fn submit_task(
         &self,
         message: TaskMessage,
@@ -50,23 +53,32 @@ impl TaskFacade {
         assignee: Option<AgentId>,
         metadata: Option<serde_json::Value>,
     ) -> Result<Task, Error> {
-        let task = {
-            let mut mgr = self.tasks.write().await;
-            mgr.create_task(message, context_id, assignee, None, metadata)?
+        // Resolve assignee before creating the task.
+        let resolved_assignee = if assignee.is_some() {
+            assignee
+        } else {
+            // Build a temporary task for the router to inspect metadata/context.
+            let temp = Task {
+                id: TaskId::new(),
+                context_id: context_id.unwrap_or_default(),
+                status: TaskStatus {
+                    state: TaskState::Submitted,
+                    message: None,
+                    timestamp: chrono::Utc::now(),
+                },
+                artifacts: vec![],
+                history: vec![],
+                metadata: metadata.clone(),
+                assignee: None,
+                creator: None,
+            };
+            let registry = self.registry.read().await;
+            let agents = registry.list();
+            self.router.select_agent(&temp, &agents)
         };
 
-        // Attempt routing — read registry without holding the task write lock.
-        let registry = self.registry.read().await;
-        let agents = registry.list();
-        if let Some(agent_id) = self.router.select_agent(&task, &agents) {
-            drop(registry);
-            let mut mgr = self.tasks.write().await;
-            if let Some(t) = mgr.get_mut(&task.id) {
-                t.assignee = Some(agent_id);
-                return Ok(t.clone());
-            }
-        }
-
+        let mut mgr = self.tasks.write().await;
+        let task = mgr.create_task(message, context_id, resolved_assignee, None, metadata)?;
         Ok(task)
     }
 

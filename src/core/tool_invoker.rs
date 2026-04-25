@@ -86,7 +86,12 @@ impl ToolInvoker {
                     id: MessageId::new(),
                     role: MessageRole::User,
                     parts: vec![Part::Text {
-                        text: serde_json::to_string(&input).unwrap_or_default(),
+                        text: serde_json::to_string(&input).map_err(|e| {
+                            Error::ToolInvocationFailed {
+                                name: name.to_owned(),
+                                reason: format!("failed to serialize input: {e}"),
+                            }
+                        })?,
                     }],
                     metadata: Some(serde_json::json!({"tool_name": name})),
                 };

@@ -55,9 +55,16 @@ impl StateManager {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ =
+            if let Err(e) =
                 tokio::fs::set_permissions(&config.path, std::fs::Permissions::from_mode(0o700))
-                    .await;
+                    .await
+            {
+                tracing::warn!(
+                    path = %config.path.display(),
+                    error = %e,
+                    "failed to set state directory permissions to 0700"
+                );
+            }
         }
 
         let key = crypto::load_or_create_key(&config.path.join(KEY_FILE)).await?;
