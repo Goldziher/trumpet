@@ -16,6 +16,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::error::Result;
+use crate::state::StateManager;
 
 /// Start the Trumpet daemon HTTP server.
 ///
@@ -56,8 +57,17 @@ pub async fn serve(config: &Config) -> Result<()> {
 
     info!("trumpet daemon listening on {}", socket_path.display());
 
+    let state_manager = StateManager::new(&config.storage).await?;
+
     let state = AppState::new(config.clone());
-    let app = routes::router(state);
+
+    // Restore persisted state if a snapshot exists.
+    if let Some(snapshot) = state_manager.load_snapshot().await? {
+        info!("restoring state from snapshot");
+        state.restore_from_snapshot(snapshot).await;
+    }
+
+    let app = routes::router(state.clone());
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -65,6 +75,13 @@ pub async fn serve(config: &Config) -> Result<()> {
         .map_err(|e| crate::error::Error::InternalUnexpected {
             reason: e.to_string(),
         })?;
+
+    // Snapshot state before exiting.
+    info!("saving state snapshot before shutdown");
+    let snapshot = state.to_snapshot().await;
+    if let Err(e) = state_manager.save_snapshot(&snapshot).await {
+        tracing::error!(error = %e, "failed to save shutdown snapshot");
+    }
 
     // Best-effort socket cleanup after graceful shutdown.
     let _ = tokio::fs::remove_file(socket_path).await;

@@ -149,6 +149,10 @@ impl AgentRegistry {
         self.agents.clear();
         self.name_index.clear();
         for info in agents {
+            if validate_name(&info.name).is_err() {
+                tracing::warn!(name = %info.name, "skipping agent with invalid name during restore");
+                continue;
+            }
             self.name_index.insert(info.name.clone(), info.id);
             self.agents.insert(info.id, info);
         }

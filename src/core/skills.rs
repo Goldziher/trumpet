@@ -181,6 +181,10 @@ impl SkillRegistry {
         self.skills.clear();
         self.name_index.clear();
         for info in skills {
+            if validate_name(&info.name).is_err() {
+                tracing::warn!(name = %info.name, "skipping skill with invalid name during restore");
+                continue;
+            }
             self.name_index.insert(info.name.clone(), info.id);
             self.skills.insert(info.id, info);
         }

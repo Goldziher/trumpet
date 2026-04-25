@@ -7,6 +7,7 @@ edition = "2024"
 ignored = ["prost", "prost-types", "tonic-prost"]
 
 [dependencies]
+aes-gcm = "0.10"
 ahash = { version = "0.8", features = ["serde"] }
 axum = { version = "0.8", features = ["ws"] }
 chrono = { version = "0.4", features = ["serde"] }

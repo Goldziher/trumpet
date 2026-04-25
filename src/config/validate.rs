@@ -46,6 +46,16 @@ fn check_storage(config: &Config) -> Result<(), ConfigError> {
             "storage.snapshot_interval_secs must be greater than 0".into(),
         ));
     }
+
+    // Reject paths that attempt directory traversal.
+    let path_str = config.storage.path.to_string_lossy();
+    if path_str.contains("..") {
+        return Err(ConfigError::ValidationFailed(format!(
+            "storage.path '{}' must not contain '..' (path traversal)",
+            config.storage.path.display()
+        )));
+    }
+
     Ok(())
 }
 
