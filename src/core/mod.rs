@@ -10,6 +10,7 @@ pub mod code_tools;
 pub mod registry;
 pub mod router;
 pub mod skills;
+pub mod task_facade;
 pub mod task_manager;
 pub mod task_types;
 pub mod types;
@@ -19,6 +20,7 @@ pub use chat::ChatManager;
 pub use registry::AgentRegistry;
 pub use router::{DefaultTaskRouter, TaskRouter};
 pub use skills::SkillRegistry;
+pub use task_facade::TaskFacade;
 pub use task_manager::{TaskEvent, TaskManager};
 pub use task_types::{
     AgentCapabilities, Artifact, ArtifactId, ContextId, MessageRole, Part, Task, TaskFilter,

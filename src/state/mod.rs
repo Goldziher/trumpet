@@ -158,6 +158,7 @@ mod tests {
             skills: vec![],
             conversations: vec![],
             messages: vec![],
+            tasks: vec![],
         }
     }
 
@@ -198,6 +199,7 @@ mod tests {
             skills: vec![skill],
             conversations: vec![conv],
             messages: vec![(conv_id, vec![msg])],
+            tasks: vec![],
         };
 
         (snapshot, agent_id, conv_id)
@@ -253,6 +255,7 @@ mod tests {
             skills: vec![],
             conversations: vec![],
             messages: vec![],
+            tasks: vec![],
         };
         manager.save_snapshot(&second).await.unwrap();
 

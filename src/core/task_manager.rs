@@ -120,6 +120,11 @@ impl TaskManager {
         self.tasks.get(id)
     }
 
+    /// Look up a task mutably by its [`TaskId`].
+    pub fn get_mut(&mut self, id: &TaskId) -> Option<&mut Task> {
+        self.tasks.get_mut(id)
+    }
+
     /// Return all tasks in unspecified order.
     pub fn list(&self) -> Vec<&Task> {
         self.tasks.values().collect()

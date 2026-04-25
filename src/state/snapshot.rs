@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::task_types::Task;
 use crate::core::types::{AgentInfo, ChatMessage, Conversation, ConversationId, SkillInfo};
 
 /// A full, point-in-time snapshot of all persistent daemon state.
@@ -21,6 +22,9 @@ pub struct StateSnapshot {
     pub conversations: Vec<Conversation>,
     /// Message histories keyed by conversation ID, in insertion order.
     pub messages: Vec<(ConversationId, Vec<ChatMessage>)>,
+    /// All tasks at the time of the snapshot.
+    #[serde(default)]
+    pub tasks: Vec<Task>,
 }
 
 #[cfg(test)]
@@ -85,6 +89,7 @@ mod tests {
             skills: vec![skill1.clone(), skill2.clone()],
             conversations: vec![conv.clone()],
             messages: vec![(conv.id, vec![msg1.clone(), msg2.clone()])],
+            tasks: vec![],
         };
 
         let encoded = rmp_serde::to_vec(&original).expect("MessagePack encoding must succeed");
