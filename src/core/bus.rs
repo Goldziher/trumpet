@@ -6,7 +6,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::core::task_types::{Artifact, Task, TaskId, TaskState};
+use crate::core::task_types::{ArtifactId, Task, TaskId, TaskState};
 use crate::core::types::{AgentId, AgentInfo, ChatMessage, SkillId, SkillInfo};
 
 /// Events propagated through the message bus.
@@ -32,7 +32,26 @@ pub enum Event {
         new_state: TaskState,
     },
     /// An artifact was added to a task.
-    TaskArtifactAdded { task_id: TaskId, artifact: Artifact },
+    TaskArtifactAdded {
+        task_id: TaskId,
+        artifact_id: ArtifactId,
+    },
+}
+
+impl Event {
+    /// The canonical event type string for SSE/WebSocket topic filtering.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::AgentRegistered(_) => "agent_registered",
+            Self::AgentDeregistered(_) => "agent_deregistered",
+            Self::NewMessage(_) => "new_message",
+            Self::SkillRegistered(_) => "skill_registered",
+            Self::SkillDeregistered(_) => "skill_deregistered",
+            Self::TaskCreated(_) => "task_created",
+            Self::TaskStatusChanged { .. } => "task_status_changed",
+            Self::TaskArtifactAdded { .. } => "task_artifact_added",
+        }
+    }
 }
 
 /// Internal broadcast channel for intra-process event propagation.

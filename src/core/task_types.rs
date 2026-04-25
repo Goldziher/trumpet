@@ -229,7 +229,7 @@ pub enum Part {
 }
 
 /// A single message within a task's conversation history.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TaskMessage {
     /// Stable identity for this message.
     pub id: MessageId,
@@ -247,7 +247,7 @@ pub struct TaskMessage {
 
 /// A snapshot of a task's current state, optionally accompanied by an
 /// explanatory message from the agent.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TaskStatus {
     /// The task's current lifecycle state.
     pub state: TaskState,
@@ -264,7 +264,7 @@ pub struct TaskStatus {
 // ---------------------------------------------------------------------------
 
 /// A named output produced by an agent as part of completing a task.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
     /// Stable identity for this artifact.
     pub id: ArtifactId,
@@ -287,7 +287,7 @@ pub struct Artifact {
 /// A task moves through a well-defined state machine (see [`TaskState`]) and
 /// accumulates [`Artifact`]s and a message [`history`](Task::history) as it
 /// progresses.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     /// Stable identity for this task.
     pub id: TaskId,

@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::core::Event;
 use crate::core::types::{
     AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, SkillInfo,
 };
@@ -210,7 +209,7 @@ async fn events(
             }
         })
         .filter_map(|event| match serde_json::to_string(&event) {
-            Ok(data) => Some(Ok(SseEvent::default().event(event_type(&event)).data(data))),
+            Ok(data) => Some(Ok(SseEvent::default().event(event.event_type()).data(data))),
             Err(e) => {
                 tracing::error!(error = %e, "failed to serialize event for SSE");
                 None
@@ -219,19 +218,7 @@ async fn events(
     Sse::new(stream)
 }
 
-/// Extract the SSE event type string from an [`Event`] variant.
-fn event_type(event: &Event) -> &'static str {
-    match event {
-        Event::AgentRegistered(_) => "agent_registered",
-        Event::AgentDeregistered(_) => "agent_deregistered",
-        Event::NewMessage(_) => "new_message",
-        Event::SkillRegistered(_) => "skill_registered",
-        Event::SkillDeregistered(_) => "skill_deregistered",
-        Event::TaskCreated(_) => "task_created",
-        Event::TaskStatusChanged { .. } => "task_status_changed",
-        Event::TaskArtifactAdded { .. } => "task_artifact_added",
-    }
-}
+// event_type is provided by Event::event_type() on crate::core::bus::Event.
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
@@ -259,6 +246,7 @@ pub fn router(state: AppState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Event;
 
     #[test]
     fn parse_conversation_id_valid_uuid_succeeds() {
@@ -291,7 +279,7 @@ mod tests {
             status: AgentStatus::Connected,
         };
         assert_eq!(
-            event_type(&Event::AgentRegistered(info)),
+            Event::AgentRegistered(info).event_type(),
             "agent_registered"
         );
     }
@@ -299,7 +287,7 @@ mod tests {
     #[test]
     fn event_type_agent_deregistered() {
         assert_eq!(
-            event_type(&Event::AgentDeregistered(AgentId::new())),
+            Event::AgentDeregistered(AgentId::new()).event_type(),
             "agent_deregistered"
         );
     }
@@ -316,7 +304,7 @@ mod tests {
             content: "hello".to_owned(),
             timestamp: Utc::now(),
         };
-        assert_eq!(event_type(&Event::NewMessage(msg)), "new_message");
+        assert_eq!(Event::NewMessage(msg).event_type(), "new_message");
     }
 
     #[test]
@@ -332,7 +320,7 @@ mod tests {
             provider: SkillProvider::BuiltIn,
         };
         assert_eq!(
-            event_type(&Event::SkillRegistered(info)),
+            Event::SkillRegistered(info).event_type(),
             "skill_registered"
         );
     }
@@ -342,7 +330,7 @@ mod tests {
         use crate::core::types::SkillId;
 
         assert_eq!(
-            event_type(&Event::SkillDeregistered(SkillId::new())),
+            Event::SkillDeregistered(SkillId::new()).event_type(),
             "skill_deregistered"
         );
     }

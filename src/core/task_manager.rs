@@ -51,8 +51,7 @@ pub enum TaskEvent {
 pub struct TaskManager {
     tasks: AHashMap<TaskId, Task>,
     context_index: AHashMap<ContextId, Vec<TaskId>>,
-    /// Global message bus — held for future cross-domain event publishing.
-    _bus: Arc<MessageBus>,
+    bus: Arc<MessageBus>,
     event_tx: broadcast::Sender<TaskEvent>,
 }
 
@@ -63,7 +62,7 @@ impl TaskManager {
         Self {
             tasks: AHashMap::new(),
             context_index: AHashMap::new(),
-            _bus: bus,
+            bus,
             event_tx,
         }
     }
@@ -254,8 +253,12 @@ impl TaskManager {
     /// # Errors
     ///
     /// Propagates errors from [`Self::update_status`].
-    pub fn cancel(&mut self, task_id: &TaskId) -> Result<Task, Error> {
-        self.update_status(task_id, TaskState::Canceled, None)
+    pub fn cancel(
+        &mut self,
+        task_id: &TaskId,
+        message: Option<TaskMessage>,
+    ) -> Result<Task, Error> {
+        self.update_status(task_id, TaskState::Canceled, message)
     }
 
     /// Return active (non-terminal) tasks assigned to `agent_id`.
@@ -288,9 +291,35 @@ impl TaskManager {
 
     // ── private helpers ───────────────────────────────────────────────────────
 
-    /// Publish a task event; silently drops the error when no receivers are
-    /// active.
+    /// Publish a task event on the task-scoped channel and mirror it to the
+    /// global bus so SSE/WebSocket subscribers see task events too.
     fn publish(&self, event: TaskEvent) {
+        // Mirror to global bus.
+        let bus_event = match &event {
+            TaskEvent::TaskCreated(task) => {
+                Some(crate::core::bus::Event::TaskCreated(task.clone()))
+            }
+            TaskEvent::TaskStatusChanged {
+                task_id,
+                old_state,
+                new_state,
+            } => Some(crate::core::bus::Event::TaskStatusChanged {
+                task_id: *task_id,
+                old_state: *old_state,
+                new_state: *new_state,
+            }),
+            TaskEvent::TaskArtifactAdded {
+                task_id,
+                artifact_id,
+            } => Some(crate::core::bus::Event::TaskArtifactAdded {
+                task_id: *task_id,
+                artifact_id: *artifact_id,
+            }),
+        };
+        if let Some(evt) = bus_event {
+            self.bus.publish(evt);
+        }
+        // Task-scoped channel.
         let _ = self.event_tx.send(event);
     }
 }
@@ -506,7 +535,7 @@ mod tests {
             .expect("Submitted → Working");
 
         let canceled = mgr
-            .cancel(&task.id)
+            .cancel(&task.id, None)
             .expect("cancel must succeed from Working");
 
         assert_eq!(

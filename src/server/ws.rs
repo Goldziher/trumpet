@@ -39,19 +39,7 @@ fn parse_subscription(text: &str) -> Option<HashSet<String>> {
         .map(|msg| msg.subscribe.into_iter().collect())
 }
 
-/// Map an [`Event`] to its canonical topic string used for subscription filtering.
-fn event_type(event: &Event) -> &'static str {
-    match event {
-        Event::AgentRegistered(_) => "agent_registered",
-        Event::AgentDeregistered(_) => "agent_deregistered",
-        Event::NewMessage(_) => "new_message",
-        Event::SkillRegistered(_) => "skill_registered",
-        Event::SkillDeregistered(_) => "skill_deregistered",
-        Event::TaskCreated(_) => "task_created",
-        Event::TaskStatusChanged { .. } => "task_status_changed",
-        Event::TaskArtifactAdded { .. } => "task_artifact_added",
-    }
-}
+// event_type is provided by Event::event_type() on crate::core::bus::Event.
 
 /// Returns `true` if `event` matches the optional topic filter.
 ///
@@ -61,7 +49,7 @@ fn event_type(event: &Event) -> &'static str {
 fn matches_filter(event: &Event, filter: Option<&HashSet<String>>) -> bool {
     match filter {
         None => true,
-        Some(set) => set.contains(event_type(event)),
+        Some(set) => set.contains(event.event_type()),
     }
 }
 
