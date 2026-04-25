@@ -48,21 +48,24 @@ impl TaskRouter for DefaultTaskRouter {
         {
             let required: Vec<&str> = tags.iter().filter_map(|t| t.as_str()).collect();
             if !required.is_empty() {
-                let matched = agents.iter().find(|a| {
-                    a.status == AgentStatus::Connected
-                        && a.capabilities.as_ref().is_some_and(|caps| {
-                            required
-                                .iter()
-                                .all(|tag| caps.skill_tags.iter().any(|t| t == tag))
-                        })
-                });
-                if let Some(agent) = matched {
-                    return Some(agent.id);
-                }
+                // When required_tags are set, only agents satisfying all tags
+                // are eligible. Return None if no capable agent is connected
+                // rather than silently assigning to an incapable agent.
+                return agents
+                    .iter()
+                    .find(|a| {
+                        a.status == AgentStatus::Connected
+                            && a.capabilities.as_ref().is_some_and(|caps| {
+                                required
+                                    .iter()
+                                    .all(|tag| caps.skill_tags.iter().any(|t| t == tag))
+                            })
+                    })
+                    .map(|a| a.id);
             }
         }
 
-        // 3. First connected agent.
+        // 3. First connected agent (no required_tags constraint).
         agents
             .iter()
             .find(|a| a.status == AgentStatus::Connected)
@@ -231,14 +234,13 @@ mod tests {
         let selected = router.select_agent(&task, &[&capable, &fallback]);
 
         assert_eq!(
-            selected,
-            Some(fallback_id),
-            "should skip disconnected capable agent and fall back"
+            selected, None,
+            "should return None when only capable agent is disconnected"
         );
     }
 
     #[test]
-    fn no_capability_match_falls_through() {
+    fn no_capability_match_returns_none() {
         let id = AgentId::new();
         let agent = make_agent_with_tags(id, AgentStatus::Connected, vec!["code.fix"]);
         let task = make_task_with_tags(vec!["code.review"]);
@@ -247,9 +249,8 @@ mod tests {
         let selected = router.select_agent(&task, &[&agent]);
 
         assert_eq!(
-            selected,
-            Some(id),
-            "should fall through to first-connected when no tags match"
+            selected, None,
+            "should return None when required_tags are unmatched"
         );
     }
 

@@ -208,11 +208,32 @@ async fn register_code_tools(state: &AppState, config: &Config) {
     *state.code_tools.write().await = Some(code_tools);
 }
 
-/// Resolves when Ctrl-C is received.
+/// Resolves when Ctrl-C or SIGTERM is received.
 async fn shutdown_signal() {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        tracing::error!(error = %e, "failed to install Ctrl+C handler");
-    } else {
-        info!("shutdown signal received");
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            result = ctrl_c => {
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "failed to install Ctrl+C handler");
+                    return;
+                }
+            }
+            _ = sigterm.recv() => {}
+        }
     }
+
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = ctrl_c.await {
+            tracing::error!(error = %e, "failed to install Ctrl+C handler");
+            return;
+        }
+    }
+
+    info!("shutdown signal received");
 }

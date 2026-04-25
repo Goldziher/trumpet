@@ -366,7 +366,7 @@ pub struct TaskFilter {
 ///
 /// Used during task routing to determine which agents can handle a given
 /// request.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentCapabilities {
     /// MIME types or mode identifiers the agent can accept as input
     /// (e.g. `["text/plain", "application/json"]`).

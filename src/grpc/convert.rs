@@ -88,9 +88,10 @@ fn proto_part_to_core(part: &proto::Part) -> Result<Part, Status> {
             let json = prost_value_to_json(val);
             Ok(Part::Data { data: json })
         }
-        Some(proto::part::Content::Raw(_)) => Ok(Part::Text {
-            text: "<binary>".to_owned(),
-        }),
+        Some(proto::part::Content::Raw(bytes)) => Err(Status::unimplemented(format!(
+            "binary (raw) parts are not yet supported ({} bytes)",
+            bytes.len()
+        ))),
         None => Err(Status::invalid_argument("part has no content")),
     }
 }

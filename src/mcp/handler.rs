@@ -17,6 +17,8 @@ use crate::server::AppState;
 pub struct RegisterAgentArgs {
     /// Human-readable name for the agent (e.g. `"claude-code-1"`).
     pub name: String,
+    /// Optional agent capabilities (input/output modes, streaming, skill tags).
+    pub capabilities: Option<crate::core::AgentCapabilities>,
 }
 
 /// Arguments for the `deregister_agent` tool.
@@ -133,7 +135,7 @@ impl TrumpetMcpServer {
         let info = {
             let mut registry = self.state.registry.write().await;
             registry
-                .register(&args.name, None)
+                .register(&args.name, args.capabilities)
                 .map_err(|e| McpError::invalid_params(e.to_string(), None))?
         };
         let json = serde_json::to_string(&info)
@@ -473,6 +475,7 @@ mod tests {
         let result = server
             .register_agent(Parameters(RegisterAgentArgs {
                 name: "test-agent".to_owned(),
+                capabilities: None,
             }))
             .await
             .expect("register_agent must succeed");
@@ -501,6 +504,7 @@ mod tests {
         server
             .register_agent(Parameters(RegisterAgentArgs {
                 name: "my-agent".to_owned(),
+                capabilities: None,
             }))
             .await
             .expect("register must succeed");
