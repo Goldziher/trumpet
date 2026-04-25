@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 
 use crate::config::Config;
 use crate::core::code_tools::CodeTools;
-use crate::core::{AgentRegistry, ChatManager, MessageBus, SkillRegistry, TaskManager};
+use crate::core::{AgentRegistry, ChatManager, MessageBus, TaskManager, ToolRegistry};
 
 /// Cloneable handle to shared daemon state.
 ///
@@ -18,8 +18,8 @@ pub struct AppState {
     pub registry: Arc<RwLock<AgentRegistry>>,
     /// Conversation manager for all active chats.
     pub chat: Arc<RwLock<ChatManager>>,
-    /// Skill registry for all available capabilities.
-    pub skills: Arc<RwLock<SkillRegistry>>,
+    /// Tool registry for all available capabilities.
+    pub tools: Arc<RwLock<ToolRegistry>>,
     /// Task manager for A2A task lifecycle.
     pub tasks: Arc<RwLock<TaskManager>>,
     /// Broadcast bus used for SSE event delivery.
@@ -37,7 +37,7 @@ impl AppState {
         Self {
             registry: Arc::new(RwLock::new(AgentRegistry::new(Arc::clone(&bus)))),
             chat: Arc::new(RwLock::new(ChatManager::new(Arc::clone(&bus)))),
-            skills: Arc::new(RwLock::new(SkillRegistry::new(Arc::clone(&bus)))),
+            tools: Arc::new(RwLock::new(ToolRegistry::new(Arc::clone(&bus)))),
             tasks: Arc::new(RwLock::new(TaskManager::new(Arc::clone(&bus)))),
             bus,
             code_tools: Arc::new(RwLock::new(None)),
@@ -49,11 +49,11 @@ impl AppState {
     pub async fn to_snapshot(&self) -> crate::state::StateSnapshot {
         let registry = self.registry.read().await;
         let chat = self.chat.read().await;
-        let skills = self.skills.read().await;
+        let tools = self.tools.read().await;
         let task_mgr = self.tasks.read().await;
 
         let agents = registry.list().into_iter().cloned().collect();
-        let skill_list = skills.list().into_iter().cloned().collect();
+        let tool_list = tools.list().into_iter().cloned().collect();
         let conversations: Vec<_> = chat.list_conversations().into_iter().cloned().collect();
         let messages = conversations
             .iter()
@@ -67,7 +67,7 @@ impl AppState {
 
         crate::state::StateSnapshot {
             agents,
-            skills: skill_list,
+            tools: tool_list,
             conversations,
             messages,
             tasks,
@@ -80,11 +80,11 @@ impl AppState {
     pub async fn restore_from_snapshot(&self, snapshot: crate::state::StateSnapshot) {
         let mut registry = self.registry.write().await;
         let mut chat = self.chat.write().await;
-        let mut skills = self.skills.write().await;
+        let mut tools = self.tools.write().await;
         let mut task_mgr = self.tasks.write().await;
 
         registry.restore(snapshot.agents);
-        skills.restore(snapshot.skills);
+        tools.restore(snapshot.tools);
         chat.restore(snapshot.conversations, snapshot.messages);
         task_mgr.restore(snapshot.tasks);
     }

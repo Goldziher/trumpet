@@ -76,38 +76,38 @@ pub enum Error {
     #[error("conversation must have at least one participant")]
     ConversationEmptyParticipants,
 
-    // ── Skill ─────────────────────────────────────────────────────────────────
-    /// No skill with this name is registered.
-    #[error("skill '{name}' not found")]
-    SkillNotFound { name: String },
+    // ── Tool ──────────────────────────────────────────────────────────────────
+    /// No tool with this name is registered.
+    #[error("tool '{name}' not found")]
+    ToolNotFound { name: String },
 
-    /// No skill with this ID is registered.
-    #[error("skill with id '{id}' not found")]
-    SkillNotFoundById { id: String },
+    /// No tool with this ID is registered.
+    #[error("tool with id '{id}' not found")]
+    ToolNotFoundById { id: String },
 
-    /// A skill with this name is already registered.
-    #[error("skill '{name}' is already registered")]
-    SkillAlreadyRegistered { name: String },
+    /// A tool with this name is already registered.
+    #[error("tool '{name}' is already registered")]
+    ToolAlreadyRegistered { name: String },
 
-    /// The provided skill name is syntactically invalid.
-    #[error("skill name '{name}' is invalid: {reason}")]
-    SkillInvalidName { name: String, reason: String },
+    /// The provided tool name is syntactically invalid.
+    #[error("tool name '{name}' is invalid: {reason}")]
+    ToolInvalidName { name: String, reason: String },
 
-    /// The provided skill description is empty or invalid.
-    #[error("skill '{name}' has invalid description: {reason}")]
-    SkillInvalidDescription { name: String, reason: String },
+    /// The provided tool description is empty or invalid.
+    #[error("tool '{name}' has invalid description: {reason}")]
+    ToolInvalidDescription { name: String, reason: String },
 
-    /// Skill invocation failed.
-    #[error("skill invocation failed for '{name}': {reason}")]
-    SkillInvocationFailed { name: String, reason: String },
+    /// Tool invocation failed.
+    #[error("tool invocation failed for '{name}': {reason}")]
+    ToolInvocationFailed { name: String, reason: String },
 
-    /// Skill invocation not yet implemented.
-    #[error("skill invocation not yet implemented for '{name}'")]
-    SkillNotImplemented { name: String },
+    /// Tool invocation not yet implemented.
+    #[error("tool invocation not yet implemented for '{name}'")]
+    ToolNotImplemented { name: String },
 
-    /// The agent providing the skill is not connected.
-    #[error("skill provider unavailable for '{name}'")]
-    SkillProviderUnavailable { name: String },
+    /// The agent providing the tool is not connected.
+    #[error("tool provider unavailable for '{name}'")]
+    ToolProviderUnavailable { name: String },
 
     // ── Task ──────────────────────────────────────────────────────────────────
     /// No task with this ID exists.
@@ -183,14 +183,14 @@ impl ErrorCode for Error {
             Self::ConversationNotFound { .. } => "CONVERSATION_NOT_FOUND",
             Self::ConversationNotParticipant { .. } => "CONVERSATION_NOT_PARTICIPANT",
             Self::ConversationEmptyParticipants => "CONVERSATION_EMPTY_PARTICIPANTS",
-            Self::SkillNotFound { .. } => "SKILL_NOT_FOUND",
-            Self::SkillNotFoundById { .. } => "SKILL_NOT_FOUND_BY_ID",
-            Self::SkillAlreadyRegistered { .. } => "SKILL_ALREADY_REGISTERED",
-            Self::SkillInvalidName { .. } => "SKILL_INVALID_NAME",
-            Self::SkillInvalidDescription { .. } => "SKILL_INVALID_DESCRIPTION",
-            Self::SkillInvocationFailed { .. } => "SKILL_INVOCATION_FAILED",
-            Self::SkillNotImplemented { .. } => "SKILL_NOT_IMPLEMENTED",
-            Self::SkillProviderUnavailable { .. } => "SKILL_PROVIDER_UNAVAILABLE",
+            Self::ToolNotFound { .. } => "TOOL_NOT_FOUND",
+            Self::ToolNotFoundById { .. } => "TOOL_NOT_FOUND_BY_ID",
+            Self::ToolAlreadyRegistered { .. } => "TOOL_ALREADY_REGISTERED",
+            Self::ToolInvalidName { .. } => "TOOL_INVALID_NAME",
+            Self::ToolInvalidDescription { .. } => "TOOL_INVALID_DESCRIPTION",
+            Self::ToolInvocationFailed { .. } => "TOOL_INVOCATION_FAILED",
+            Self::ToolNotImplemented { .. } => "TOOL_NOT_IMPLEMENTED",
+            Self::ToolProviderUnavailable { .. } => "TOOL_PROVIDER_UNAVAILABLE",
             Self::TaskNotFound { .. } => "TASK_NOT_FOUND",
             Self::TaskInvalidTransition { .. } => "TASK_INVALID_TRANSITION",
             Self::TaskAlreadyTerminal { .. } => "TASK_ALREADY_TERMINAL",
@@ -210,16 +210,16 @@ impl ErrorCode for Error {
         match self {
             Self::DaemonNotRunning
             | Self::DaemonShutdownFailed { .. }
-            | Self::SkillProviderUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            | Self::ToolProviderUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::DaemonAlreadyRunning { .. }
             | Self::AgentAlreadyRegistered { .. }
-            | Self::SkillAlreadyRegistered { .. }
+            | Self::ToolAlreadyRegistered { .. }
             | Self::DaemonStaleSocket { .. } => StatusCode::CONFLICT,
             Self::DaemonBindFailed { .. }
             | Self::ConnectionRefused
             | Self::ConnectionTimeout { .. }
             | Self::ConnectionSocketNotFound { .. } => StatusCode::BAD_GATEWAY,
-            Self::SkillInvocationFailed { .. }
+            Self::ToolInvocationFailed { .. }
             | Self::StateSnapshotFailed { .. }
             | Self::StateRestoreFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::TaskAlreadyTerminal { .. } => StatusCode::CONFLICT,
@@ -228,13 +228,13 @@ impl ErrorCode for Error {
             Self::TaskRoutingFailed { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::AgentNotFound { .. }
             | Self::ConversationNotFound { .. }
-            | Self::SkillNotFound { .. }
-            | Self::SkillNotFoundById { .. }
+            | Self::ToolNotFound { .. }
+            | Self::ToolNotFoundById { .. }
             | Self::ConfigMissingDir { .. } => StatusCode::NOT_FOUND,
-            Self::SkillNotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
+            Self::ToolNotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
             Self::AgentInvalidName { .. }
-            | Self::SkillInvalidName { .. }
-            | Self::SkillInvalidDescription { .. }
+            | Self::ToolInvalidName { .. }
+            | Self::ToolInvalidDescription { .. }
             | Self::ConversationEmptyParticipants
             | Self::ConfigInvalidToml { .. }
             | Self::ConfigValidationFailed { .. } => StatusCode::UNPROCESSABLE_ENTITY,
@@ -293,29 +293,29 @@ impl ErrorCode for Error {
             Self::ConversationEmptyParticipants => {
                 "provide at least one agent name when creating a conversation".to_owned()
             }
-            Self::SkillNotFound { name } => {
-                format!("list registered skills with GET /skills; '{name}' was not found")
+            Self::ToolNotFound { name } => {
+                format!("list registered tools with GET /tools; '{name}' was not found")
             }
-            Self::SkillNotFoundById { id } => {
-                format!("no skill with id '{id}'; list registered skills with GET /skills")
+            Self::ToolNotFoundById { id } => {
+                format!("no tool with id '{id}'; list registered tools with GET /tools")
             }
-            Self::SkillAlreadyRegistered { name } => {
-                format!("deregister the existing skill first or use a different name; '{name}' already exists")
+            Self::ToolAlreadyRegistered { name } => {
+                format!("deregister the existing tool first or use a different name; '{name}' already exists")
             }
-            Self::SkillInvalidName { .. } => {
-                "skill names must be 1-64 chars, alphanumeric plus hyphens, underscores, and dots; no leading/trailing hyphen or dot".to_owned()
+            Self::ToolInvalidName { .. } => {
+                "tool names must be 1-64 chars, alphanumeric plus hyphens, underscores, and dots; no leading/trailing hyphen or dot".to_owned()
             }
-            Self::SkillInvalidDescription { .. } => {
-                "skill description must not be empty".to_owned()
+            Self::ToolInvalidDescription { .. } => {
+                "tool description must not be empty".to_owned()
             }
-            Self::SkillInvocationFailed { name, reason } => {
-                format!("skill '{name}' failed to execute: {reason}")
+            Self::ToolInvocationFailed { name, reason } => {
+                format!("tool '{name}' failed to execute: {reason}")
             }
-            Self::SkillNotImplemented { .. } => {
-                "skill invocation is not yet implemented".to_owned()
+            Self::ToolNotImplemented { .. } => {
+                "tool invocation is not yet implemented".to_owned()
             }
-            Self::SkillProviderUnavailable { name } => {
-                format!("the agent providing skill '{name}' is not currently connected; check agent status")
+            Self::ToolProviderUnavailable { name } => {
+                format!("the agent providing tool '{name}' is not currently connected; check agent status")
             }
             Self::TaskNotFound { id } => {
                 format!("no task with id '{id}'; use GET /tasks to list tasks")
@@ -432,31 +432,31 @@ mod tests {
                 id: "abc-123".to_owned(),
             },
             Error::ConversationEmptyParticipants,
-            Error::SkillNotFound {
+            Error::ToolNotFound {
                 name: "scan".to_owned(),
             },
-            Error::SkillNotFoundById {
+            Error::ToolNotFoundById {
                 id: "f47ac10b-58cc-4372-a567-0e02b2c3d479".to_owned(),
             },
-            Error::SkillAlreadyRegistered {
+            Error::ToolAlreadyRegistered {
                 name: "scan".to_owned(),
             },
-            Error::SkillInvalidName {
+            Error::ToolInvalidName {
                 name: "-bad".to_owned(),
                 reason: "leading hyphen".to_owned(),
             },
-            Error::SkillInvalidDescription {
+            Error::ToolInvalidDescription {
                 name: "scan".to_owned(),
                 reason: "empty".to_owned(),
             },
-            Error::SkillInvocationFailed {
+            Error::ToolInvocationFailed {
                 name: "scan".to_owned(),
                 reason: "timeout".to_owned(),
             },
-            Error::SkillNotImplemented {
+            Error::ToolNotImplemented {
                 name: "scan".to_owned(),
             },
-            Error::SkillProviderUnavailable {
+            Error::ToolProviderUnavailable {
                 name: "scan".to_owned(),
             },
             Error::TaskNotFound {

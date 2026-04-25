@@ -17,7 +17,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::core::code_tools::CodeTools;
-use crate::core::types::SkillProvider;
+use crate::core::types::ToolProvider;
 use crate::error::Result;
 use crate::grpc::proto::a2a_service_server::A2aServiceServer;
 use crate::grpc::service::NexusA2aService;
@@ -26,7 +26,7 @@ use crate::state::StateManager;
 /// Start the Trumpet daemon.
 ///
 /// Binds a Unix domain socket for HTTP, starts gRPC on the configured TCP
-/// port, restores persisted state, registers built-in skills, spawns a
+/// port, restores persisted state, registers built-in tools, spawns a
 /// periodic snapshot timer, and blocks until Ctrl-C.
 pub async fn serve(config: &Config) -> Result<()> {
     let socket_path = &config.daemon.socket_path;
@@ -67,7 +67,7 @@ pub async fn serve(config: &Config) -> Result<()> {
         state.restore_from_snapshot(snapshot).await;
     }
 
-    // ── Register built-in code tools as skills ───────────────────────────────
+    // ── Register built-in code tools ───────────────────────────────────────
     register_code_tools(&state, config).await;
 
     // ── gRPC server ──────────────────────────────────────────────────────────
@@ -128,12 +128,12 @@ pub async fn serve(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Register built-in code intelligence skills in the skill registry.
+/// Register built-in code intelligence tools in the tool registry.
 async fn register_code_tools(state: &AppState, config: &Config) {
-    let tools = CodeTools::new(config.code_tools.clone());
-    let mut skills = state.skills.write().await;
+    let code_tools = CodeTools::new(config.code_tools.clone());
+    let mut tools = state.tools.write().await;
 
-    let code_skills = [
+    let builtin_tools = [
         (
             "code.scan_repo",
             "Scan a directory tree and return file metadata with detected languages",
@@ -148,21 +148,21 @@ async fn register_code_tools(state: &AppState, config: &Config) {
         ),
     ];
 
-    for (name, desc) in code_skills {
-        if let Err(e) = skills.register(
+    for (name, desc) in builtin_tools {
+        if let Err(e) = tools.register(
             name,
             desc,
             serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             serde_json::json!({"type": "object"}),
-            SkillProvider::BuiltIn,
+            ToolProvider::BuiltIn,
         ) {
-            tracing::warn!(skill = name, error = %e, "failed to register built-in skill");
+            tracing::warn!(tool = name, error = %e, "failed to register built-in tool");
         }
     }
 
     // Store the CodeTools instance in AppState for later invocation.
-    drop(skills);
-    *state.code_tools.write().await = Some(tools);
+    drop(tools);
+    *state.code_tools.write().await = Some(code_tools);
 }
 
 /// Resolves when Ctrl-C is received.

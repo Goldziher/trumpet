@@ -1,6 +1,6 @@
 //! Tree-sitter powered code intelligence tools.
 //!
-//! Provides built-in skills for repository scanning, file reading, and code
+//! Provides built-in tools for repository scanning, file reading, and code
 //! structure parsing. All CPU-bound work is offloaded to
 //! [`tokio::task::spawn_blocking`] so the async runtime stays unblocked.
 

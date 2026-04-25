@@ -1,12 +1,12 @@
 //! Serializable snapshot of all in-memory daemon state.
 //!
-//! A [`StateSnapshot`] captures agents, skills, conversations, and messages
-//! at a point in time. It is serialized as MessagePack and written to `snapshot.msgpack` by [`super::StateManager`].
+//! A [`StateSnapshot`] captures agents, tools, conversations, and messages
+//! at a point in time. It is serialized as MessagePack and written to `snapshot.enc` by [`super::StateManager`].
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::task_types::Task;
-use crate::core::types::{AgentInfo, ChatMessage, Conversation, ConversationId, SkillInfo};
+use crate::core::types::{AgentInfo, ChatMessage, Conversation, ConversationId, ToolInfo};
 
 /// A full, point-in-time snapshot of all persistent daemon state.
 ///
@@ -16,8 +16,9 @@ use crate::core::types::{AgentInfo, ChatMessage, Conversation, ConversationId, S
 pub struct StateSnapshot {
     /// All registered agents at the time of the snapshot.
     pub agents: Vec<AgentInfo>,
-    /// All registered skills at the time of the snapshot.
-    pub skills: Vec<SkillInfo>,
+    /// All registered tools at the time of the snapshot.
+    #[serde(alias = "skills")]
+    pub tools: Vec<ToolInfo>,
     /// All known conversation metadata at the time of the snapshot.
     pub conversations: Vec<Conversation>,
     /// Message histories keyed by conversation ID, in insertion order.
@@ -32,7 +33,7 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::core::types::{AgentId, AgentStatus, MessageId, SkillId, SkillProvider};
+    use crate::core::types::{AgentId, AgentStatus, MessageId, ToolId, ToolProvider};
 
     fn make_agent_info(name: &str) -> AgentInfo {
         AgentInfo {
@@ -43,14 +44,14 @@ mod tests {
         }
     }
 
-    fn make_skill_info(name: &str) -> SkillInfo {
-        SkillInfo {
-            id: SkillId::new(),
+    fn make_tool_info(name: &str) -> ToolInfo {
+        ToolInfo {
+            id: ToolId::new(),
             name: name.to_owned(),
             description: format!("{name} description"),
             input_schema: serde_json::json!({}),
             output_schema: serde_json::json!({}),
-            provider: SkillProvider::BuiltIn,
+            provider: ToolProvider::BuiltIn,
         }
     }
 
@@ -78,15 +79,15 @@ mod tests {
     fn snapshot_round_trip_via_msgpack() {
         let agent1 = make_agent_info("agent-one");
         let agent2 = make_agent_info("agent-two");
-        let skill1 = make_skill_info("skill-one");
-        let skill2 = make_skill_info("skill-two");
+        let tool1 = make_tool_info("tool-one");
+        let tool2 = make_tool_info("tool-two");
         let conv = make_conversation(vec![agent1.id, agent2.id]);
         let msg1 = make_message(conv.id, agent1.id, "hello");
         let msg2 = make_message(conv.id, agent2.id, "world");
 
         let original = StateSnapshot {
             agents: vec![agent1.clone(), agent2.clone()],
-            skills: vec![skill1.clone(), skill2.clone()],
+            tools: vec![tool1.clone(), tool2.clone()],
             conversations: vec![conv.clone()],
             messages: vec![(conv.id, vec![msg1.clone(), msg2.clone()])],
             tasks: vec![],
@@ -103,9 +104,9 @@ mod tests {
             "decoded snapshot must contain 2 agents"
         );
         assert_eq!(
-            decoded.skills.len(),
+            decoded.tools.len(),
             2,
-            "decoded snapshot must contain 2 skills"
+            "decoded snapshot must contain 2 tools"
         );
         assert_eq!(
             decoded.conversations.len(),
@@ -140,11 +141,11 @@ mod tests {
             "agent-two name must survive round-trip"
         );
 
-        // Verify skill identity.
-        let decoded_skill_ids: Vec<_> = decoded.skills.iter().map(|s| s.id).collect();
+        // Verify tool identity.
+        let decoded_tool_ids: Vec<_> = decoded.tools.iter().map(|s| s.id).collect();
         assert!(
-            decoded_skill_ids.contains(&skill1.id),
-            "skill-one id must survive round-trip"
+            decoded_tool_ids.contains(&tool1.id),
+            "tool-one id must survive round-trip"
         );
 
         // Verify conversation.

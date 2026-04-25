@@ -1,7 +1,7 @@
 //! A2A service implementation backed by trumpet's core domain.
 //!
 //! Implements the official A2A protocol (`lf.a2a.v1.A2AService`) with
-//! trumpet's agent registry, chat manager, and skill registry as the
+//! trumpet's agent registry, chat manager, and tool registry as the
 //! backing stores.
 
 use std::pin::Pin;

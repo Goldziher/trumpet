@@ -96,30 +96,30 @@ impl std::str::FromStr for MessageId {
     }
 }
 
-/// Unique identifier for a registered skill.
+/// Unique identifier for a registered tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SkillId(Uuid);
+pub struct ToolId(Uuid);
 
-impl SkillId {
-    /// Create a new random [`SkillId`].
+impl ToolId {
+    /// Create a new random [`ToolId`].
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }
 
-impl Default for SkillId {
+impl Default for ToolId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::fmt::Display for SkillId {
+impl std::fmt::Display for ToolId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl std::str::FromStr for SkillId {
+impl std::str::FromStr for ToolId {
     type Err = uuid::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
@@ -171,34 +171,34 @@ pub struct ChatMessage {
     pub timestamp: DateTime<Utc>,
 }
 
-/// Who provides a skill — an agent or the system itself.
+/// Who provides a tool — an agent or the system itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum SkillProvider {
-    /// The skill is provided by a connected agent.
+pub enum ToolProvider {
+    /// The tool is provided by a connected agent.
     Agent { agent_id: AgentId },
-    /// The skill is provided by the daemon itself.
+    /// The tool is provided by the daemon itself.
     BuiltIn,
 }
 
-/// Metadata for a registered skill.
+/// Metadata for a registered tool.
 ///
 /// `Eq` and `Hash` cannot be derived because `serde_json::Value` contains
 /// floats which only implement `PartialEq`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SkillInfo {
-    /// Stable identity for this skill.
-    pub id: SkillId,
-    /// Human-readable skill name (e.g. `"code.scan_repo"`).
+pub struct ToolInfo {
+    /// Stable identity for this tool.
+    pub id: ToolId,
+    /// Human-readable tool name (e.g. `"code.scan_repo"`).
     pub name: String,
-    /// Description of what the skill does.
+    /// Description of what the tool does.
     pub description: String,
     /// JSON Schema describing the expected input payload.
     pub input_schema: serde_json::Value,
     /// JSON Schema describing the output payload.
     pub output_schema: serde_json::Value,
-    /// Who provides this skill.
-    pub provider: SkillProvider,
+    /// Who provides this tool.
+    pub provider: ToolProvider,
 }
 
 /// A named thread of conversation between one or more agents.
@@ -243,15 +243,15 @@ mod tests {
     }
 
     #[test]
-    fn skill_id_new_produces_unique_ids() {
-        let a = SkillId::new();
-        let b = SkillId::new();
-        assert_ne!(a, b, "two freshly generated SkillIds must not be equal");
+    fn tool_id_new_produces_unique_ids() {
+        let a = ToolId::new();
+        let b = ToolId::new();
+        assert_ne!(a, b, "two freshly generated ToolIds must not be equal");
     }
 
     #[test]
-    fn skill_id_display_is_valid_uuid_string() {
-        let id = SkillId::new();
+    fn tool_id_display_is_valid_uuid_string() {
+        let id = ToolId::new();
         let s = id.to_string();
         assert_eq!(s.len(), 36, "display should be a hyphenated UUID: {s}");
         assert!(

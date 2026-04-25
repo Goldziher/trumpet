@@ -7,7 +7,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::core::task_types::{ArtifactId, Task, TaskId, TaskState};
-use crate::core::types::{AgentId, AgentInfo, ChatMessage, SkillId, SkillInfo};
+use crate::core::types::{AgentId, AgentInfo, ChatMessage, ToolId, ToolInfo};
 
 /// Events propagated through the message bus.
 #[derive(Clone, Debug, Serialize)]
@@ -19,10 +19,10 @@ pub enum Event {
     AgentDeregistered(AgentId),
     /// A new message has been posted to a conversation.
     NewMessage(ChatMessage),
-    /// A new skill has been registered.
-    SkillRegistered(SkillInfo),
-    /// A skill has been deregistered.
-    SkillDeregistered(SkillId),
+    /// A new tool has been registered.
+    ToolRegistered(ToolInfo),
+    /// A tool has been deregistered.
+    ToolDeregistered(ToolId),
     /// A new task was created.
     TaskCreated(Box<Task>),
     /// A task's state changed.
@@ -45,8 +45,8 @@ impl Event {
             Self::AgentRegistered(_) => "agent_registered",
             Self::AgentDeregistered(_) => "agent_deregistered",
             Self::NewMessage(_) => "new_message",
-            Self::SkillRegistered(_) => "skill_registered",
-            Self::SkillDeregistered(_) => "skill_deregistered",
+            Self::ToolRegistered(_) => "tool_registered",
+            Self::ToolDeregistered(_) => "tool_deregistered",
             Self::TaskCreated(_) => "task_created",
             Self::TaskStatusChanged { .. } => "task_status_changed",
             Self::TaskArtifactAdded { .. } => "task_artifact_added",

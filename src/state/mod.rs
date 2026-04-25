@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use crate::core::types::{
         AgentId, AgentInfo, AgentStatus, ChatMessage, Conversation, ConversationId, MessageId,
-        SkillId, SkillInfo, SkillProvider,
+        ToolId, ToolInfo, ToolProvider,
     };
 
     async fn make_manager(dir: &TempDir) -> StateManager {
@@ -155,7 +155,7 @@ mod tests {
         };
         StateSnapshot {
             agents: vec![agent],
-            skills: vec![],
+            tools: vec![],
             conversations: vec![],
             messages: vec![],
             tasks: vec![],
@@ -172,13 +172,13 @@ mod tests {
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
         };
-        let skill = SkillInfo {
-            id: SkillId::new(),
-            name: "rich-skill".to_owned(),
-            description: "a skill".to_owned(),
+        let tool = ToolInfo {
+            id: ToolId::new(),
+            name: "rich-tool".to_owned(),
+            description: "a tool".to_owned(),
             input_schema: serde_json::json!({}),
             output_schema: serde_json::json!({}),
-            provider: SkillProvider::BuiltIn,
+            provider: ToolProvider::BuiltIn,
         };
         let conv = Conversation {
             id: conv_id,
@@ -196,7 +196,7 @@ mod tests {
 
         let snapshot = StateSnapshot {
             agents: vec![agent],
-            skills: vec![skill],
+            tools: vec![tool],
             conversations: vec![conv],
             messages: vec![(conv_id, vec![msg])],
             tasks: vec![],
@@ -226,7 +226,7 @@ mod tests {
 
         assert_eq!(loaded.agents[0].id, agent_id);
         assert_eq!(loaded.agents[0].name, "rich-agent");
-        assert_eq!(loaded.skills[0].name, "rich-skill");
+        assert_eq!(loaded.tools[0].name, "rich-tool");
         assert_eq!(loaded.conversations[0].id, conv_id);
         assert_eq!(loaded.messages[0].1[0].content, "hello");
     }
@@ -252,7 +252,7 @@ mod tests {
                 registered_at: Utc::now(),
                 status: AgentStatus::Disconnected,
             }],
-            skills: vec![],
+            tools: vec![],
             conversations: vec![],
             messages: vec![],
             tasks: vec![],

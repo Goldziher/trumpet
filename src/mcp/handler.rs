@@ -1,6 +1,6 @@
 //! MCP server handler for the Trumpet agent nexus.
 //!
-//! [`TrumpetMcpServer`] exposes tools for managing agents, skills, and
+//! [`TrumpetMcpServer`] exposes tools for managing agents, tools, and
 //! conversations over the Model Context Protocol.
 
 use rmcp::{
@@ -189,12 +189,12 @@ impl TrumpetMcpServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    /// List all registered skills.
-    #[tool(description = "List all skills registered with the Trumpet nexus.")]
-    async fn list_skills(&self) -> Result<CallToolResult, McpError> {
-        let skills = self.state.skills.read().await;
-        let skill_list: Vec<_> = skills.list().into_iter().cloned().collect();
-        let json = serde_json::to_string(&skill_list)
+    /// List all registered tools.
+    #[tool(description = "List all tools registered with the Trumpet nexus.")]
+    async fn list_tools(&self) -> Result<CallToolResult, McpError> {
+        let tools = self.state.tools.read().await;
+        let tool_list: Vec<_> = tools.list().into_iter().cloned().collect();
+        let json = serde_json::to_string(&tool_list)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -419,7 +419,7 @@ impl ServerHandler for TrumpetMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("trumpet", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
-            .with_instructions("Trumpet agent nexus — manage agents, skills, and conversations.")
+            .with_instructions("Trumpet agent nexus — manage agents, tools, and conversations.")
     }
 }
 
@@ -519,12 +519,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_skills_tool_returns_empty_initially() {
+    async fn list_tools_tool_returns_empty_initially() {
         let server = make_server();
-        let result = server
-            .list_skills()
-            .await
-            .expect("list_skills must succeed");
+        let result = server.list_tools().await.expect("list_tools must succeed");
 
         assert!(!result.is_error.unwrap_or(false), "must not be an error");
         let text = result
@@ -535,8 +532,8 @@ mod tests {
             .expect("text")
             .text
             .as_str();
-        let skills: Vec<serde_json::Value> = serde_json::from_str(text).expect("valid JSON");
-        assert!(skills.is_empty(), "expected no skills initially");
+        let tools: Vec<serde_json::Value> = serde_json::from_str(text).expect("valid JSON");
+        assert!(tools.is_empty(), "expected no tools initially");
     }
 
     #[tokio::test]

@@ -14,7 +14,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::core::task_types::{MessageRole, Part, TaskMessage};
 use crate::core::types::{
-    AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, MessageId, SkillInfo,
+    AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, MessageId, ToolInfo,
 };
 use crate::core::{ContextId, DefaultTaskRouter, Task, TaskFacade, TaskFilter, TaskId, TaskState};
 use crate::error::{Error, Result};
@@ -50,10 +50,10 @@ pub struct SendMessageRequest {
     pub content: String,
 }
 
-/// Request body for invoking a skill.
+/// Request body for invoking a tool.
 #[derive(Debug, Deserialize)]
-pub(crate) struct InvokeSkillRequest {
-    /// The JSON payload to pass to the skill.
+pub(crate) struct InvokeToolRequest {
+    /// The JSON payload to pass to the tool.
     #[expect(
         dead_code,
         reason = "stub: field read by serde, used when invocation is implemented"
@@ -172,42 +172,42 @@ async fn get_messages(
     Ok(Json(messages))
 }
 
-/// GET /skills — list all registered skills.
-async fn list_skills(State(state): State<AppState>) -> Json<Vec<SkillInfo>> {
-    let skills = state.skills.read().await;
-    let list: Vec<SkillInfo> = skills.list().into_iter().cloned().collect();
+/// GET /tools — list all registered tools.
+async fn list_tools(State(state): State<AppState>) -> Json<Vec<ToolInfo>> {
+    let tools = state.tools.read().await;
+    let list: Vec<ToolInfo> = tools.list().into_iter().cloned().collect();
     Json(list)
 }
 
-/// GET /skills/{name} — find a skill by name.
-async fn get_skill_by_name(
+/// GET /tools/{name} — find a tool by name.
+async fn get_tool_by_name(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Result<Json<SkillInfo>> {
-    let skills = state.skills.read().await;
-    let info = skills
+) -> Result<Json<ToolInfo>> {
+    let tools = state.tools.read().await;
+    let info = tools
         .find_by_name(&name)
-        .ok_or_else(|| Error::SkillNotFound { name: name.clone() })?
+        .ok_or_else(|| Error::ToolNotFound { name: name.clone() })?
         .clone();
     Ok(Json(info))
 }
 
-/// POST /skills/{name}/invoke — invoke a skill by name.
+/// POST /tools/{name}/invoke — invoke a tool by name.
 ///
-/// Validates the skill exists, then delegates to the provider. Currently
+/// Validates the tool exists, then delegates to the provider. Currently
 /// returns an error because provider invocation is not yet implemented.
-async fn invoke_skill(
+async fn invoke_tool(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(_req): Json<InvokeSkillRequest>,
+    Json(_req): Json<InvokeToolRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    // Verify the skill exists before reporting "not implemented".
-    let skills = state.skills.read().await;
-    let _info = skills
+    // Verify the tool exists before reporting "not implemented".
+    let tools = state.tools.read().await;
+    let _info = tools
         .find_by_name(&name)
-        .ok_or_else(|| Error::SkillNotFound { name: name.clone() })?;
+        .ok_or_else(|| Error::ToolNotFound { name: name.clone() })?;
 
-    Err(Error::SkillNotImplemented { name })
+    Err(Error::ToolNotImplemented { name })
 }
 
 // ── Task helpers ─────────────────────────────────────────────────────────────
@@ -372,9 +372,9 @@ pub fn router(state: AppState) -> Router {
             "/conversations/{id}/messages",
             post(send_message).get(get_messages),
         )
-        .route("/skills", get(list_skills))
-        .route("/skills/{name}", get(get_skill_by_name))
-        .route("/skills/{name}/invoke", post(invoke_skill))
+        .route("/tools", get(list_tools))
+        .route("/tools/{name}", get(get_tool_by_name))
+        .route("/tools/{name}/invoke", post(invoke_tool))
         .route("/tasks", post(submit_task).get(list_tasks_handler))
         .route("/tasks/{id}", get(get_task_by_id))
         .route("/tasks/{id}/cancel", post(cancel_task_handler))
@@ -448,30 +448,27 @@ mod tests {
     }
 
     #[test]
-    fn event_type_skill_registered() {
-        use crate::core::types::{SkillId, SkillInfo, SkillProvider};
+    fn event_type_tool_registered() {
+        use crate::core::types::{ToolId, ToolInfo, ToolProvider};
 
-        let info = SkillInfo {
-            id: SkillId::new(),
+        let info = ToolInfo {
+            id: ToolId::new(),
             name: "test".to_owned(),
             description: "desc".to_owned(),
             input_schema: serde_json::json!({}),
             output_schema: serde_json::json!({}),
-            provider: SkillProvider::BuiltIn,
+            provider: ToolProvider::BuiltIn,
         };
-        assert_eq!(
-            Event::SkillRegistered(info).event_type(),
-            "skill_registered"
-        );
+        assert_eq!(Event::ToolRegistered(info).event_type(), "tool_registered");
     }
 
     #[test]
-    fn event_type_skill_deregistered() {
-        use crate::core::types::SkillId;
+    fn event_type_tool_deregistered() {
+        use crate::core::types::ToolId;
 
         assert_eq!(
-            Event::SkillDeregistered(SkillId::new()).event_type(),
-            "skill_deregistered"
+            Event::ToolDeregistered(ToolId::new()).event_type(),
+            "tool_deregistered"
         );
     }
 
