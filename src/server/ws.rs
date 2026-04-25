@@ -47,6 +47,9 @@ fn event_type(event: &Event) -> &'static str {
         Event::NewMessage(_) => "new_message",
         Event::SkillRegistered(_) => "skill_registered",
         Event::SkillDeregistered(_) => "skill_deregistered",
+        Event::TaskCreated(_) => "task_created",
+        Event::TaskStatusChanged { .. } => "task_status_changed",
+        Event::TaskArtifactAdded { .. } => "task_artifact_added",
     }
 }
 

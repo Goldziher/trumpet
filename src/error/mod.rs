@@ -109,6 +109,27 @@ pub enum Error {
     #[error("skill provider unavailable for '{name}'")]
     SkillProviderUnavailable { name: String },
 
+    // ── Task ──────────────────────────────────────────────────────────────────
+    /// No task with this ID exists.
+    #[error("task '{id}' not found")]
+    TaskNotFound { id: String },
+
+    /// The requested state transition is invalid.
+    #[error("invalid task transition for '{task_id}': {from} -> {to}")]
+    TaskInvalidTransition {
+        task_id: String,
+        from: String,
+        to: String,
+    },
+
+    /// The task is already in a terminal state.
+    #[error("task '{task_id}' is already terminal ({state})")]
+    TaskAlreadyTerminal { task_id: String, state: String },
+
+    /// No suitable agent was found to handle the task.
+    #[error("no agent available to handle task '{task_id}'")]
+    TaskRoutingFailed { task_id: String },
+
     // ── State ─────────────────────────────────────────────────────────────────
     /// Writing a state snapshot to persistent storage failed.
     #[error("state snapshot failed: {reason}")]
@@ -170,6 +191,10 @@ impl ErrorCode for Error {
             Self::SkillInvocationFailed { .. } => "SKILL_INVOCATION_FAILED",
             Self::SkillNotImplemented { .. } => "SKILL_NOT_IMPLEMENTED",
             Self::SkillProviderUnavailable { .. } => "SKILL_PROVIDER_UNAVAILABLE",
+            Self::TaskNotFound { .. } => "TASK_NOT_FOUND",
+            Self::TaskInvalidTransition { .. } => "TASK_INVALID_TRANSITION",
+            Self::TaskAlreadyTerminal { .. } => "TASK_ALREADY_TERMINAL",
+            Self::TaskRoutingFailed { .. } => "TASK_ROUTING_FAILED",
             Self::StateSnapshotFailed { .. } => "STATE_SNAPSHOT_FAILED",
             Self::StateRestoreFailed { .. } => "STATE_RESTORE_FAILED",
             Self::ConfigInvalidToml { .. } => "CONFIG_INVALID_TOML",
@@ -196,7 +221,11 @@ impl ErrorCode for Error {
             | Self::ConnectionSocketNotFound { .. } => StatusCode::BAD_GATEWAY,
             Self::SkillInvocationFailed { .. }
             | Self::StateSnapshotFailed { .. }
-            | Self::StateRestoreFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            | Self::StateRestoreFailed { .. }
+            | Self::TaskAlreadyTerminal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::TaskNotFound { .. } => StatusCode::NOT_FOUND,
+            Self::TaskInvalidTransition { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::TaskRoutingFailed { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::AgentNotFound { .. }
             | Self::ConversationNotFound { .. }
             | Self::SkillNotFound { .. }
@@ -287,6 +316,19 @@ impl ErrorCode for Error {
             }
             Self::SkillProviderUnavailable { name } => {
                 format!("the agent providing skill '{name}' is not currently connected; check agent status")
+            }
+            Self::TaskNotFound { id } => {
+                format!("no task with id '{id}'; use GET /tasks to list tasks")
+            }
+            Self::TaskInvalidTransition { from, to, .. } => {
+                format!("cannot transition from {from} to {to}; check the task state machine")
+            }
+            Self::TaskAlreadyTerminal { state, .. } => {
+                format!("task is in terminal state {state} and cannot be modified")
+            }
+            Self::TaskRoutingFailed { .. } => {
+                "no connected agent can handle this task; register an agent or assign explicitly"
+                    .to_owned()
             }
             Self::StateSnapshotFailed { reason } => {
                 format!("snapshot write failed: {reason}; check storage path permissions and disk space")
@@ -416,6 +458,21 @@ mod tests {
             },
             Error::SkillProviderUnavailable {
                 name: "scan".to_owned(),
+            },
+            Error::TaskNotFound {
+                id: "abc-123".to_owned(),
+            },
+            Error::TaskInvalidTransition {
+                task_id: "abc".to_owned(),
+                from: "submitted".to_owned(),
+                to: "completed".to_owned(),
+            },
+            Error::TaskAlreadyTerminal {
+                task_id: "abc".to_owned(),
+                state: "completed".to_owned(),
+            },
+            Error::TaskRoutingFailed {
+                task_id: "abc".to_owned(),
             },
             Error::StateSnapshotFailed {
                 reason: "disk full".to_owned(),

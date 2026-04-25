@@ -6,6 +6,7 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::core::task_types::{Artifact, Task, TaskId, TaskState};
 use crate::core::types::{AgentId, AgentInfo, ChatMessage, SkillId, SkillInfo};
 
 /// Events propagated through the message bus.
@@ -22,6 +23,16 @@ pub enum Event {
     SkillRegistered(SkillInfo),
     /// A skill has been deregistered.
     SkillDeregistered(SkillId),
+    /// A new task was created.
+    TaskCreated(Box<Task>),
+    /// A task's state changed.
+    TaskStatusChanged {
+        task_id: TaskId,
+        old_state: TaskState,
+        new_state: TaskState,
+    },
+    /// An artifact was added to a task.
+    TaskArtifactAdded { task_id: TaskId, artifact: Artifact },
 }
 
 /// Internal broadcast channel for intra-process event propagation.
