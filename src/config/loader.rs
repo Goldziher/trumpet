@@ -197,6 +197,11 @@ fn resolve_paths(config: &mut Config, home: &Path) {
         config.storage.path = base.join("state");
     }
 
+    let security_default = crate::config::types::SecurityConfig::default();
+    if config.security.auth_token_path == security_default.auth_token_path {
+        config.security.auth_token_path = base.join("auth.token");
+    }
+
     // Default workspace_root to the daemon's current working directory so the
     // sandbox check in code_tools has something to anchor on.
     if config.code_tools.workspace_root.is_none()

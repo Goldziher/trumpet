@@ -13,6 +13,7 @@ axum = { version = "0.8", features = ["ws"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.6", features = ["derive"] }
 futures-util = "0.3"
+libc = "0.2.186"
 nix = { version = "0.31", features = ["signal", "process"] }
 opendal = { version = "0.55", features = ["services-fs"] }
 prost = "0.14"

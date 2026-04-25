@@ -28,6 +28,9 @@ pub struct Config {
     /// Tree-sitter code tool limits.
     #[serde(default)]
     pub code_tools: CodeToolsConfig,
+    /// Local-process authentication settings.
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 /// Daemon process settings.
@@ -172,6 +175,35 @@ impl Default for AgentsConfig {
         Self {
             heartbeat_interval_secs: 30,
             timeout_secs: 300,
+        }
+    }
+}
+
+/// Local-process authentication settings.
+///
+/// REST/WebSocket access is gated by a Unix-socket peer-credential check
+/// (the connecting process's UID must match the daemon's). gRPC access is
+/// gated by a shared bearer token written to [`SecurityConfig::auth_token_path`]
+/// at daemon startup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Path to the bearer-token file. Auto-generated with `0600` permissions
+    /// at daemon startup if missing. Defaults to `~/.trumpet/auth.token` in
+    /// the loader after `$HOME` resolution.
+    pub auth_token_path: PathBuf,
+    /// When `false`, peer-credential and bearer-token checks are skipped.
+    /// Set this only for local development or test daemons; production usage
+    /// must keep it `true`.
+    #[serde(default = "default_true")]
+    pub require_auth: bool,
+}
+
+impl Default for SecurityConfig {
+    /// Placeholder path; resolved relative to `$HOME` in [`Config::load`].
+    fn default() -> Self {
+        Self {
+            auth_token_path: PathBuf::from("/tmp/trumpet/auth.token"),
+            require_auth: true,
         }
     }
 }

@@ -3,6 +3,7 @@
 //! The server listens on a Unix domain socket and exposes a JSON REST API,
 //! SSE, WebSocket, gRPC (A2A), and optionally an MCP stdio server.
 
+pub mod auth;
 mod error;
 mod routes;
 mod state;
@@ -25,6 +26,10 @@ use crate::error::Result;
 use crate::grpc::proto::a2a_service_server::A2aServiceServer;
 use crate::grpc::service::NexusA2aService;
 use crate::state::StateManager;
+
+use self::auth::{
+    BearerTokenInterceptor, PeerCheckedUnixListener, current_uid, load_or_create_token,
+};
 
 /// Start the Trumpet daemon.
 ///
@@ -61,6 +66,30 @@ pub async fn serve(config: &Config) -> Result<()> {
 
     info!("trumpet daemon listening on {}", socket_path.display());
 
+    // ── Auth bootstrap ───────────────────────────────────────────────────────
+    // Load or generate the gRPC bearer token before binding any TCP listener
+    // so unauthenticated callers cannot race ahead of the auth check.
+    let auth_token = Arc::new(load_or_create_token(&config.security.auth_token_path)?);
+    if config.security.require_auth {
+        info!(
+            path = %config.security.auth_token_path.display(),
+            "auth token loaded; gRPC bearer-token and unix peer-credential checks enabled"
+        );
+    } else {
+        tracing::warn!(
+            "security.require_auth is FALSE — REST/gRPC are open to all local processes"
+        );
+    }
+    if config.server.host == "0.0.0.0" || config.server.host == "::" {
+        tracing::warn!(
+            host = %config.server.host,
+            "gRPC is bound to a non-loopback host; ensure a firewall or mTLS is in place"
+        );
+    }
+
+    let secured_listener =
+        PeerCheckedUnixListener::new(listener, current_uid(), config.security.require_auth);
+
     // ── State restore ────────────────────────────────────────────────────────
     let state_manager = Arc::new(StateManager::new(&config.storage).await?);
     let state = AppState::new(config.clone());
@@ -83,10 +112,15 @@ pub async fn serve(config: &Config) -> Result<()> {
                 reason: format!("invalid gRPC listen address: {e}"),
             })?;
     let grpc_service = NexusA2aService::new(state.clone());
+    let grpc_interceptor =
+        BearerTokenInterceptor::new(Arc::clone(&auth_token), config.security.require_auth);
     let grpc_handle = tokio::spawn(async move {
         info!(addr = %grpc_socket_addr, "gRPC server starting");
         if let Err(e) = tonic::transport::Server::builder()
-            .add_service(A2aServiceServer::new(grpc_service))
+            .add_service(A2aServiceServer::with_interceptor(
+                grpc_service,
+                grpc_interceptor,
+            ))
             .serve(grpc_socket_addr)
             .await
         {
@@ -145,7 +179,7 @@ pub async fn serve(config: &Config) -> Result<()> {
     // ── HTTP server ──────────────────────────────────────────────────────────
     let app = routes::router(state.clone());
 
-    axum::serve(listener, app)
+    axum::serve(secured_listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| crate::error::Error::InternalUnexpected {
