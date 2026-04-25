@@ -130,14 +130,22 @@ impl TaskManager {
     ///
     /// All non-`None` filter fields must match; unset fields are ignored.
     pub fn list_filtered(&self, filter: &TaskFilter) -> Vec<&Task> {
-        self.tasks
-            .values()
+        // Use the context index for O(1) context-scoped lookups when possible.
+        let candidates: Box<dyn Iterator<Item = &Task>> = match &filter.context_id {
+            Some(ctx) => {
+                let ids = self.context_index.get(ctx);
+                Box::new(
+                    ids.into_iter()
+                        .flatten()
+                        .filter_map(|id| self.tasks.get(id)),
+                )
+            }
+            None => Box::new(self.tasks.values()),
+        };
+
+        candidates
             .filter(|t| {
-                filter
-                    .context_id
-                    .as_ref()
-                    .is_none_or(|c| &t.context_id == c)
-                    && filter.state.as_ref().is_none_or(|s| &t.status.state == s)
+                filter.state.as_ref().is_none_or(|s| &t.status.state == s)
                     && filter
                         .assignee
                         .as_ref()
@@ -152,33 +160,41 @@ impl TaskManager {
     ///
     /// # Errors
     ///
-    /// - [`Error::InternalUnexpected`] — task not found or the transition is
-    ///   invalid (current state cannot move to `new_state`).
+    /// - [`Error::TaskNotFound`] — no task with `task_id`.
+    /// - [`Error::TaskAlreadyTerminal`] — task is in a terminal state.
+    /// - [`Error::TaskInvalidTransition`] — the transition is not allowed.
     pub fn update_status(
         &mut self,
         task_id: &TaskId,
         new_state: TaskState,
         message: Option<TaskMessage>,
     ) -> Result<Task, Error> {
-        let old_state = self
+        // Single mutable lookup avoids double-borrow and the expect("checked above") pattern.
+        let task = self
             .tasks
-            .get(task_id)
-            .ok_or_else(|| Error::InternalUnexpected {
-                reason: format!("task '{task_id}' not found"),
-            })?
-            .status
-            .state;
+            .get_mut(task_id)
+            .ok_or_else(|| Error::TaskNotFound {
+                id: task_id.to_string(),
+            })?;
+
+        let old_state = task.status.state;
+
+        if old_state.is_terminal() {
+            return Err(Error::TaskAlreadyTerminal {
+                task_id: task_id.to_string(),
+                state: format!("{old_state:?}"),
+            });
+        }
 
         if !old_state.can_transition_to(new_state) {
-            return Err(Error::InternalUnexpected {
-                reason: format!(
-                    "invalid task transition: {old_state:?} → {new_state:?} for task '{task_id}'"
-                ),
+            return Err(Error::TaskInvalidTransition {
+                task_id: task_id.to_string(),
+                from: format!("{old_state:?}"),
+                to: format!("{new_state:?}"),
             });
         }
 
         let now = Utc::now();
-        let task = self.tasks.get_mut(task_id).expect("checked above");
 
         task.status = TaskStatus {
             state: new_state,
@@ -204,15 +220,23 @@ impl TaskManager {
     ///
     /// # Errors
     ///
-    /// - [`Error::InternalUnexpected`] — task not found.
+    /// - [`Error::TaskNotFound`] — no task with `task_id`.
+    /// - [`Error::TaskAlreadyTerminal`] — task is in a terminal state.
     pub fn add_artifact(&mut self, task_id: &TaskId, artifact: Artifact) -> Result<Task, Error> {
         let artifact_id = artifact.id;
         let task = self
             .tasks
             .get_mut(task_id)
-            .ok_or_else(|| Error::InternalUnexpected {
-                reason: format!("task '{task_id}' not found"),
+            .ok_or_else(|| Error::TaskNotFound {
+                id: task_id.to_string(),
             })?;
+
+        if task.status.state.is_terminal() {
+            return Err(Error::TaskAlreadyTerminal {
+                task_id: task_id.to_string(),
+                state: format!("{:?}", task.status.state),
+            });
+        }
 
         task.artifacts.push(artifact);
 
@@ -415,8 +439,8 @@ mod tests {
             .expect_err("Submitted → Completed must be rejected");
 
         assert!(
-            matches!(err, Error::InternalUnexpected { .. }),
-            "expected InternalUnexpected for invalid transition, got: {err:?}"
+            matches!(err, Error::TaskInvalidTransition { .. }),
+            "expected TaskInvalidTransition, got: {err:?}"
         );
     }
 
@@ -437,8 +461,8 @@ mod tests {
             .expect_err("Completed → Working must be rejected");
 
         assert!(
-            matches!(err, Error::InternalUnexpected { .. }),
-            "expected InternalUnexpected for terminal → active, got: {err:?}"
+            matches!(err, Error::TaskAlreadyTerminal { .. }),
+            "expected TaskAlreadyTerminal, got: {err:?}"
         );
     }
 

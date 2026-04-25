@@ -221,8 +221,8 @@ impl ErrorCode for Error {
             | Self::ConnectionSocketNotFound { .. } => StatusCode::BAD_GATEWAY,
             Self::SkillInvocationFailed { .. }
             | Self::StateSnapshotFailed { .. }
-            | Self::StateRestoreFailed { .. }
-            | Self::TaskAlreadyTerminal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            | Self::StateRestoreFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::TaskAlreadyTerminal { .. } => StatusCode::CONFLICT,
             Self::TaskNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TaskInvalidTransition { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TaskRoutingFailed { .. } => StatusCode::SERVICE_UNAVAILABLE,
