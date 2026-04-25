@@ -19,13 +19,14 @@ pub trait TaskRouter: Send + Sync {
 
 /// Default routing strategy used by the nexus.
 ///
-/// Selection order:
+/// Selection order (ADR-013):
 ///
 /// 1. **Explicit assignment** — if the task's `assignee` is connected, return
 ///    it immediately.
-/// 2. **First connected agent** — fall back to the first
-///    [`AgentStatus::Connected`] agent in the slice (capability-based matching
-///    will be added later, see ADR-013).
+/// 2. **Capability matching** — if the task metadata contains `required_tags`,
+///    find a connected agent whose `capabilities.skill_tags` satisfy all tags.
+/// 3. **First connected agent** — fall back to the first
+///    [`AgentStatus::Connected`] agent in the slice.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DefaultTaskRouter;
 
@@ -40,7 +41,28 @@ impl TaskRouter for DefaultTaskRouter {
             return Some(assignee);
         }
 
-        // 2. First connected agent (capability matching deferred to ADR-013).
+        // 2. Capability matching: find connected agents whose skill_tags
+        //    satisfy all required_tags from task metadata.
+        if let Some(ref metadata) = task.metadata
+            && let Some(tags) = metadata.get("required_tags").and_then(|v| v.as_array())
+        {
+            let required: Vec<&str> = tags.iter().filter_map(|t| t.as_str()).collect();
+            if !required.is_empty() {
+                let matched = agents.iter().find(|a| {
+                    a.status == AgentStatus::Connected
+                        && a.capabilities.as_ref().is_some_and(|caps| {
+                            required
+                                .iter()
+                                .all(|tag| caps.skill_tags.iter().any(|t| t == tag))
+                        })
+                });
+                if let Some(agent) = matched {
+                    return Some(agent.id);
+                }
+            }
+        }
+
+        // 3. First connected agent.
         agents
             .iter()
             .find(|a| a.status == AgentStatus::Connected)
@@ -136,6 +158,114 @@ mod tests {
             selected,
             Some(id),
             "should fall back to the first connected agent when no assignee"
+        );
+    }
+
+    // ── capability matching ──────────────────────────────────────────────────
+
+    fn make_agent_with_tags(id: AgentId, status: AgentStatus, tags: Vec<&str>) -> AgentInfo {
+        use crate::core::task_types::AgentCapabilities;
+        AgentInfo {
+            id,
+            name: "tagged-agent".to_owned(),
+            registered_at: Utc::now(),
+            status,
+            capabilities: Some(AgentCapabilities {
+                supported_input_modes: vec![],
+                supported_output_modes: vec![],
+                streaming: false,
+                skill_tags: tags.into_iter().map(String::from).collect(),
+            }),
+        }
+    }
+
+    fn make_task_with_tags(tags: Vec<&str>) -> Task {
+        let bus = Arc::new(MessageBus::new(16));
+        let mut mgr = TaskManager::new(bus);
+        let metadata = serde_json::json!({"required_tags": tags});
+        mgr.create_task(
+            TaskMessage {
+                id: MessageId::new(),
+                role: MessageRole::User,
+                parts: vec![Part::Text {
+                    text: "do something".to_owned(),
+                }],
+                metadata: None,
+            },
+            None,
+            None,
+            None,
+            Some(metadata),
+        )
+        .expect("create_task must succeed in test helper")
+    }
+
+    #[test]
+    fn capability_matching_selects_tagged_agent() {
+        let capable_id = AgentId::new();
+        let plain_id = AgentId::new();
+        let capable = make_agent_with_tags(capable_id, AgentStatus::Connected, vec!["code.review"]);
+        let plain = make_agent(plain_id, AgentStatus::Connected);
+        let task = make_task_with_tags(vec!["code.review"]);
+        let router = DefaultTaskRouter;
+
+        let selected = router.select_agent(&task, &[&plain, &capable]);
+
+        assert_eq!(
+            selected,
+            Some(capable_id),
+            "should select agent with matching skill tags"
+        );
+    }
+
+    #[test]
+    fn capability_matching_skips_disconnected_agent() {
+        let capable_id = AgentId::new();
+        let fallback_id = AgentId::new();
+        let capable =
+            make_agent_with_tags(capable_id, AgentStatus::Disconnected, vec!["code.review"]);
+        let fallback = make_agent(fallback_id, AgentStatus::Connected);
+        let task = make_task_with_tags(vec!["code.review"]);
+        let router = DefaultTaskRouter;
+
+        let selected = router.select_agent(&task, &[&capable, &fallback]);
+
+        assert_eq!(
+            selected,
+            Some(fallback_id),
+            "should skip disconnected capable agent and fall back"
+        );
+    }
+
+    #[test]
+    fn no_capability_match_falls_through() {
+        let id = AgentId::new();
+        let agent = make_agent_with_tags(id, AgentStatus::Connected, vec!["code.fix"]);
+        let task = make_task_with_tags(vec!["code.review"]);
+        let router = DefaultTaskRouter;
+
+        let selected = router.select_agent(&task, &[&agent]);
+
+        assert_eq!(
+            selected,
+            Some(id),
+            "should fall through to first-connected when no tags match"
+        );
+    }
+
+    #[test]
+    fn empty_required_tags_skips_matching() {
+        let id = AgentId::new();
+        let agent = make_agent(id, AgentStatus::Connected);
+        let task = make_task_with_tags(vec![]);
+        let router = DefaultTaskRouter;
+
+        let selected = router.select_agent(&task, &[&agent]);
+
+        assert_eq!(
+            selected,
+            Some(id),
+            "empty required_tags should skip capability matching"
         );
     }
 }
