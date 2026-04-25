@@ -12,9 +12,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::core::task_types::{ContextId, TaskId};
-use crate::core::{
-    DefaultTaskRouter, Event, PushNotificationAuth, PushNotificationId, TaskFacade, TaskFilter,
-};
+use crate::core::{Event, PushNotificationAuth, PushNotificationId, TaskFacade, TaskFilter};
 use crate::grpc::convert;
 use crate::grpc::proto;
 use crate::server::AppState;
@@ -36,12 +34,11 @@ impl NexusA2aService {
         Self { state }
     }
 
-    fn make_facade(&self) -> TaskFacade {
-        TaskFacade::new(
-            Arc::clone(&self.state.tasks),
-            Arc::clone(&self.state.registry),
-            Box::new(DefaultTaskRouter),
-        )
+    /// Borrow the shared task facade owned by [`AppState`]. Returns a cheap
+    /// `Arc` clone — every transport adapter shares the same facade
+    /// instance so we don't allocate a fresh router per request.
+    fn facade(&self) -> Arc<TaskFacade> {
+        Arc::clone(&self.state.task_facade)
     }
 
     /// Spawn a background task that subscribes to the message bus, filters
@@ -63,7 +60,7 @@ impl NexusA2aService {
     ) -> ReceiverStream<Result<proto::StreamResponse, Status>> {
         let (tx, rx) = tokio::sync::mpsc::channel(STREAM_CHANNEL_CAPACITY);
         let mut bus_rx = self.state.bus.subscribe();
-        let facade = self.make_facade();
+        let facade = self.facade();
 
         tokio::spawn(async move {
             // Emit initial task snapshot so the client never misses state.
@@ -144,7 +141,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             )
         };
 
-        let facade = self.make_facade();
+        let facade = self.facade();
         let task = facade
             .submit_task(core_msg, context_id, None, None)
             .await
@@ -180,7 +177,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             )
         };
 
-        let facade = self.make_facade();
+        let facade = self.facade();
         let task = facade
             .submit_task(core_msg, context_id, None, None)
             .await
@@ -200,7 +197,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             .parse()
             .map_err(|_| Status::invalid_argument("invalid task id"))?;
 
-        let facade = self.make_facade();
+        let facade = self.facade();
         let task = facade
             .get_task(&task_id)
             .await
@@ -242,7 +239,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
         // Clients should treat it as opaque and round-trip it unchanged.
         let page_size = req.page_size.unwrap_or(50).clamp(1, 100) as usize;
 
-        let facade = self.make_facade();
+        let facade = self.facade();
         let mut tasks = facade.list_tasks(&filter).await;
         tasks.sort_by_key(|t| t.id);
 
@@ -296,7 +293,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             .parse()
             .map_err(|_| Status::invalid_argument("invalid task id"))?;
 
-        let facade = self.make_facade();
+        let facade = self.facade();
         let task = facade
             .cancel_task(&task_id, None)
             .await
@@ -323,7 +320,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             .parse()
             .map_err(|_| Status::invalid_argument("invalid task id"))?;
 
-        let facade = self.make_facade();
+        let facade = self.facade();
         let task = facade
             .get_task(&task_id)
             .await
@@ -344,7 +341,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             .map_err(|_| Status::invalid_argument("invalid task id"))?;
 
         // Verify the task exists before registering a webhook against it.
-        let facade = self.make_facade();
+        let facade = self.facade();
         facade
             .get_task(&task_id)
             .await
@@ -891,7 +888,7 @@ mod tests {
             .expect("first item must be Ok");
 
         // Trigger a state change via the facade.
-        let facade = svc.make_facade();
+        let facade = svc.facade();
         let parsed: TaskId = task_id.parse().unwrap();
         facade
             .update_status(&parsed, crate::core::TaskState::Working, None)

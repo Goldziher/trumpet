@@ -11,9 +11,21 @@ pub(crate) mod ws;
 
 pub use state::AppState;
 
+/// Construct the daemon's axum router for use in integration tests.
+///
+/// Production code wires the same router via [`serve`] together with the
+/// peer-credential listener and gRPC stack. Tests that only need to exercise
+/// the HTTP surface can call this directly with a freshly-built
+/// [`AppState`].
+#[doc(hidden)]
+pub fn router_for_tests(state: AppState) -> axum::Router {
+    routes::router(state)
+}
+
 use std::sync::Arc;
 
 use tokio::net::UnixListener;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use rmcp::ServiceExt as _;
@@ -111,9 +123,16 @@ pub async fn serve(config: &Config) -> Result<()> {
                 path: grpc_addr.clone(),
                 reason: format!("invalid gRPC listen address: {e}"),
             })?;
+    // ── Cancellation token ───────────────────────────────────────────────────
+    // Shared across all background tasks. When the HTTP shutdown signal
+    // arrives, we cancel this token so the gRPC server drains in-flight
+    // requests via serve_with_shutdown rather than getting hard-aborted.
+    let cancel = CancellationToken::new();
+
     let grpc_service = NexusA2aService::new(state.clone());
     let grpc_interceptor =
         BearerTokenInterceptor::new(Arc::clone(&auth_token), config.security.require_auth);
+    let grpc_cancel = cancel.clone();
     let grpc_handle = tokio::spawn(async move {
         info!(addr = %grpc_socket_addr, "gRPC server starting");
         if let Err(e) = tonic::transport::Server::builder()
@@ -121,7 +140,9 @@ pub async fn serve(config: &Config) -> Result<()> {
                 grpc_service,
                 grpc_interceptor,
             ))
-            .serve(grpc_socket_addr)
+            .serve_with_shutdown(grpc_socket_addr, async move {
+                grpc_cancel.cancelled().await;
+            })
             .await
         {
             tracing::error!(error = %e, "gRPC server failed");
@@ -200,8 +221,20 @@ pub async fn serve(config: &Config) -> Result<()> {
         })?;
 
     // ── Shutdown ─────────────────────────────────────────────────────────────
+    info!("HTTP server stopped; draining background tasks");
+
+    // Signal gRPC to drain in-flight RPCs. Wait up to 30s for the server
+    // to finish; force-abort beyond that.
+    cancel.cancel();
+    match tokio::time::timeout(std::time::Duration::from_secs(30), grpc_handle).await {
+        Ok(Ok(())) => info!("gRPC server stopped gracefully"),
+        Ok(Err(e)) => tracing::warn!(error = %e, "gRPC server task panicked during drain"),
+        Err(_) => tracing::warn!("gRPC server did not drain within 30s; forcing shutdown"),
+    }
+
+    // Internal workers (snapshot timer, push delivery) hold no
+    // client-visible state so a hard abort is acceptable.
     snapshot_handle.abort();
-    grpc_handle.abort();
     push_handle.abort();
     if let Some(handle) = mcp_handle {
         handle.abort();

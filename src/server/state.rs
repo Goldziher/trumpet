@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 use crate::config::Config;
 use crate::core::code_tools::CodeTools;
 use crate::core::{
-    AgentRegistry, ChatManager, MessageBus, PushNotificationStore, TaskManager, ToolRegistry,
+    AgentRegistry, ChatManager, DefaultTaskRouter, MessageBus, PushNotificationStore, TaskFacade,
+    TaskManager, ToolRegistry,
 };
 
 /// Cloneable handle to shared daemon state.
@@ -30,6 +31,9 @@ pub struct AppState {
     pub bus: Arc<MessageBus>,
     /// Built-in code intelligence tools (populated after startup).
     pub code_tools: Arc<RwLock<Option<CodeTools>>>,
+    /// Shared task facade — one instance is built at startup so adapters
+    /// don't allocate a fresh router on every request.
+    pub task_facade: Arc<TaskFacade>,
     /// Immutable daemon configuration.
     pub config: Arc<Config>,
 }
@@ -38,14 +42,25 @@ impl AppState {
     /// Construct a fresh [`AppState`] from a validated [`Config`].
     pub fn new(config: Config) -> Self {
         let bus = Arc::new(MessageBus::new(1024));
+        let registry = Arc::new(RwLock::new(AgentRegistry::new(Arc::clone(&bus))));
+        let chat = Arc::new(RwLock::new(ChatManager::new(Arc::clone(&bus))));
+        let tools = Arc::new(RwLock::new(ToolRegistry::new(Arc::clone(&bus))));
+        let tasks = Arc::new(RwLock::new(TaskManager::new(Arc::clone(&bus))));
+        let push_notifications = Arc::new(RwLock::new(PushNotificationStore::new()));
+        let task_facade = Arc::new(TaskFacade::new(
+            Arc::clone(&tasks),
+            Arc::clone(&registry),
+            Box::new(DefaultTaskRouter),
+        ));
         Self {
-            registry: Arc::new(RwLock::new(AgentRegistry::new(Arc::clone(&bus)))),
-            chat: Arc::new(RwLock::new(ChatManager::new(Arc::clone(&bus)))),
-            tools: Arc::new(RwLock::new(ToolRegistry::new(Arc::clone(&bus)))),
-            tasks: Arc::new(RwLock::new(TaskManager::new(Arc::clone(&bus)))),
-            push_notifications: Arc::new(RwLock::new(PushNotificationStore::new())),
+            registry,
+            chat,
+            tools,
+            tasks,
+            push_notifications,
             bus,
             code_tools: Arc::new(RwLock::new(None)),
+            task_facade,
             config: Arc::new(config),
         }
     }

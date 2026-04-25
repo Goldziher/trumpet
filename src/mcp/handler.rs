@@ -295,11 +295,7 @@ impl TrumpetMcpServer {
             metadata: None,
         };
 
-        let facade = crate::core::TaskFacade::new(
-            std::sync::Arc::clone(&self.state.tasks),
-            std::sync::Arc::clone(&self.state.registry),
-            Box::new(crate::core::DefaultTaskRouter),
-        );
+        let facade = std::sync::Arc::clone(&self.state.task_facade);
         let task = facade
             .submit_task(message, context_id, assignee, None)
             .await
@@ -321,11 +317,7 @@ impl TrumpetMcpServer {
             .parse::<crate::core::TaskId>()
             .map_err(|e| McpError::invalid_params(format!("invalid task_id: {e}"), None))?;
 
-        let facade = crate::core::TaskFacade::new(
-            std::sync::Arc::clone(&self.state.tasks),
-            std::sync::Arc::clone(&self.state.registry),
-            Box::new(crate::core::DefaultTaskRouter),
-        );
+        let facade = std::sync::Arc::clone(&self.state.task_facade);
         let task = facade.get_task(&task_id).await.map_err(|e| match &e {
             crate::error::Error::TaskNotFound { .. } => {
                 McpError::invalid_params(e.to_string(), None)
@@ -376,11 +368,7 @@ impl TrumpetMcpServer {
             state: state_filter,
             assignee,
         };
-        let facade = crate::core::TaskFacade::new(
-            std::sync::Arc::clone(&self.state.tasks),
-            std::sync::Arc::clone(&self.state.registry),
-            Box::new(crate::core::DefaultTaskRouter),
-        );
+        let facade = std::sync::Arc::clone(&self.state.task_facade);
         let tasks = facade.list_tasks(&filter).await;
 
         let json = serde_json::to_string(&tasks)
@@ -399,11 +387,7 @@ impl TrumpetMcpServer {
             .parse::<crate::core::TaskId>()
             .map_err(|e| McpError::invalid_params(format!("invalid task_id: {e}"), None))?;
 
-        let facade = crate::core::TaskFacade::new(
-            std::sync::Arc::clone(&self.state.tasks),
-            std::sync::Arc::clone(&self.state.registry),
-            Box::new(crate::core::DefaultTaskRouter),
-        );
+        let facade = std::sync::Arc::clone(&self.state.task_facade);
         let task = facade
             .cancel_task(&task_id, None)
             .await

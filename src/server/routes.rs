@@ -16,7 +16,7 @@ use crate::core::task_types::{MessageRole, Part, TaskMessage};
 use crate::core::types::{
     AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, MessageId, ToolInfo,
 };
-use crate::core::{ContextId, DefaultTaskRouter, Task, TaskFacade, TaskFilter, TaskId, TaskState};
+use crate::core::{ContextId, Task, TaskFilter, TaskId, TaskState};
 use crate::error::{Error, Result};
 
 use super::state::AppState;
@@ -211,7 +211,7 @@ async fn invoke_tool(
     let invoker = crate::core::ToolInvoker::new(
         Arc::clone(&state.tools),
         Arc::clone(&state.code_tools),
-        Arc::clone(&state.tasks),
+        Arc::clone(&state.task_facade),
         Arc::clone(&state.registry),
     );
     let result = invoker.invoke(&name, req.input).await?;
@@ -223,14 +223,6 @@ async fn invoke_tool(
 }
 
 // ── Task helpers ─────────────────────────────────────────────────────────────
-
-fn make_facade(state: &AppState) -> TaskFacade {
-    TaskFacade::new(
-        Arc::clone(&state.tasks),
-        Arc::clone(&state.registry),
-        Box::new(DefaultTaskRouter),
-    )
-}
 
 /// POST /tasks — submit a new task.
 async fn submit_task(
@@ -264,7 +256,7 @@ async fn submit_task(
         metadata: None,
     };
 
-    let facade = make_facade(&state);
+    let facade = Arc::clone(&state.task_facade);
     let task = facade
         .submit_task(message, context_id, assignee, None)
         .await?;
@@ -279,7 +271,7 @@ async fn get_task_by_id(
     let task_id = id
         .parse::<TaskId>()
         .map_err(|_| Error::TaskNotFound { id: id.clone() })?;
-    let facade = make_facade(&state);
+    let facade = Arc::clone(&state.task_facade);
     let task = facade.get_task(&task_id).await?;
     Ok(Json(task))
 }
@@ -324,7 +316,7 @@ async fn list_tasks_handler(
         state: state_filter,
         assignee,
     };
-    let facade = make_facade(&state);
+    let facade = Arc::clone(&state.task_facade);
     let tasks = facade.list_tasks(&filter).await;
     Ok(Json(tasks))
 }
@@ -337,7 +329,7 @@ async fn cancel_task_handler(
     let task_id = id
         .parse::<TaskId>()
         .map_err(|_| Error::TaskNotFound { id: id.clone() })?;
-    let facade = make_facade(&state);
+    let facade = Arc::clone(&state.task_facade);
     let task = facade.cancel_task(&task_id, None).await?;
     Ok(Json(task))
 }

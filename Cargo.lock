@@ -3110,6 +3110,7 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tokio-tungstenite",
+ "tokio-util",
  "toml",
  "tonic",
  "tonic-prost",

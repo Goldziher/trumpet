@@ -12,29 +12,35 @@ use crate::core::code_tools::CodeTools;
 use crate::core::task_types::{MessageRole, Part, TaskMessage};
 use crate::core::tools::{ToolRegistry, ToolResult};
 use crate::core::types::{MessageId, ToolProvider};
-use crate::core::{AgentRegistry, DefaultTaskRouter, TaskFacade, TaskManager};
+use crate::core::{AgentRegistry, TaskFacade};
 use crate::error::Error;
 
 /// Dispatches tool invocations to the appropriate provider.
 pub struct ToolInvoker {
     tools: Arc<RwLock<ToolRegistry>>,
     code_tools: Arc<RwLock<Option<CodeTools>>>,
-    tasks: Arc<RwLock<TaskManager>>,
+    facade: Arc<TaskFacade>,
     registry: Arc<RwLock<AgentRegistry>>,
 }
 
 impl ToolInvoker {
     /// Create a new [`ToolInvoker`] from shared state components.
+    ///
+    /// `facade` should be the daemon-wide [`TaskFacade`] kept in
+    /// [`AppState`](crate::server::AppState); per-call construction was
+    /// replaced with this shared instance to avoid allocating a fresh
+    /// [`Box<DefaultTaskRouter>`](crate::core::DefaultTaskRouter) per
+    /// agent-tool invocation.
     pub fn new(
         tools: Arc<RwLock<ToolRegistry>>,
         code_tools: Arc<RwLock<Option<CodeTools>>>,
-        tasks: Arc<RwLock<TaskManager>>,
+        facade: Arc<TaskFacade>,
         registry: Arc<RwLock<AgentRegistry>>,
     ) -> Self {
         Self {
             tools,
             code_tools,
-            tasks,
+            facade,
             registry,
         }
     }
@@ -96,12 +102,8 @@ impl ToolInvoker {
                     metadata: Some(serde_json::json!({"tool_name": name})),
                 };
 
-                let facade = TaskFacade::new(
-                    Arc::clone(&self.tasks),
-                    Arc::clone(&self.registry),
-                    Box::new(DefaultTaskRouter),
-                );
-                let task = facade
+                let task = self
+                    .facade
                     .submit_task(message, None, Some(agent_id), None)
                     .await?;
                 Ok(ToolResult::TaskCreated {
@@ -125,6 +127,8 @@ mod tests {
     }
 
     fn make_invoker() -> ToolInvoker {
+        use crate::core::DefaultTaskRouter;
+
         let bus = Arc::new(MessageBus::new(64));
         let tools = Arc::new(RwLock::new(ToolRegistry::new(Arc::clone(&bus))));
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -137,7 +141,12 @@ mod tests {
         )));
         let tasks = Arc::new(RwLock::new(crate::core::TaskManager::new(Arc::clone(&bus))));
         let registry = Arc::new(RwLock::new(AgentRegistry::new(Arc::clone(&bus))));
-        ToolInvoker::new(tools, code_tools, tasks, registry)
+        let facade = Arc::new(TaskFacade::new(
+            Arc::clone(&tasks),
+            Arc::clone(&registry),
+            Box::new(DefaultTaskRouter),
+        ));
+        ToolInvoker::new(tools, code_tools, facade, registry)
     }
 
     #[tokio::test]
