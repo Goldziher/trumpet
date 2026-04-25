@@ -250,7 +250,8 @@ pub enum MessageRole {
 /// A single content part within a [`TaskMessage`] or [`Artifact`].
 ///
 /// The `type` field is used as the serde tag so the JSON representation is
-/// self-describing: `{"type":"text","text":"hello"}`.
+/// self-describing: `{"type":"text","text":"hello"}` and
+/// `{"type":"bytes","bytes":"<base64>"}` for binary payloads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
@@ -260,6 +261,31 @@ pub enum Part {
     Url { url: String },
     /// Arbitrary structured JSON data.
     Data { data: serde_json::Value },
+    /// Raw binary content. Encoded as base64 in JSON so the wire form remains
+    /// valid UTF-8; transferred as native bytes over gRPC.
+    Bytes {
+        #[serde(with = "base64_bytes")]
+        bytes: Vec<u8>,
+    },
+}
+
+/// Serde codec that round-trips `Vec<u8>` through standard base64.
+///
+/// Used by [`Part::Bytes`] so the JSON form is `{"bytes":"<base64>"}` rather
+/// than a JSON array of integers (which would balloon the payload size).
+mod base64_bytes {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        STANDARD.decode(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A single message within a task's conversation history.

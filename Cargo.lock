@@ -3217,6 +3217,7 @@ dependencies = [
  "ahash",
  "assert_cmd",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "futures-util",

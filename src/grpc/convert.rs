@@ -72,6 +72,7 @@ fn core_part_to_proto(part: &Part) -> proto::Part {
             let prost_val = json_to_prost_value(data.clone());
             Some(proto::part::Content::Data(prost_val))
         }
+        Part::Bytes { bytes } => Some(proto::part::Content::Raw(bytes.clone())),
     };
     proto::Part {
         content,
@@ -89,10 +90,9 @@ fn proto_part_to_core(part: &proto::Part) -> Result<Part, Status> {
             let json = prost_value_to_json(val);
             Ok(Part::Data { data: json })
         }
-        Some(proto::part::Content::Raw(bytes)) => Err(Status::unimplemented(format!(
-            "binary (raw) parts are not yet supported ({} bytes)",
-            bytes.len()
-        ))),
+        Some(proto::part::Content::Raw(bytes)) => Ok(Part::Bytes {
+            bytes: bytes.to_vec(),
+        }),
         None => Err(Status::invalid_argument("part has no content")),
     }
 }
@@ -385,6 +385,46 @@ mod tests {
         let proto_part = core_part_to_proto(&core_part);
         let back = proto_part_to_core(&proto_part).expect("round-trip must succeed");
         assert_eq!(back, core_part, "text part must survive round-trip");
+    }
+
+    #[test]
+    fn part_bytes_round_trips_through_proto() {
+        let core_part = Part::Bytes {
+            bytes: vec![0x00, 0x01, 0xff, b'\n', 0x42],
+        };
+        let proto_part = core_part_to_proto(&core_part);
+        // Confirm the proto carries the Raw variant verbatim.
+        assert!(matches!(
+            proto_part.content,
+            Some(proto::part::Content::Raw(_))
+        ));
+        let back = proto_part_to_core(&proto_part).expect("round-trip must succeed");
+        assert_eq!(back, core_part, "binary part must survive round-trip");
+    }
+
+    #[test]
+    fn part_bytes_serializes_to_base64_json() {
+        let part = Part::Bytes {
+            bytes: vec![b'h', b'i'],
+        };
+        let json = serde_json::to_value(&part).expect("serialize");
+        assert_eq!(json["type"], "bytes");
+        // "hi" base64 = "aGk=".
+        assert_eq!(json["bytes"], "aGk=");
+        let back: Part = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back, part);
+    }
+
+    #[test]
+    fn part_bytes_deserialize_rejects_invalid_base64() {
+        let json = serde_json::json!({"type":"bytes","bytes":"!@#%^&*"});
+        let err =
+            serde_json::from_value::<Part>(json).expect_err("invalid base64 must fail to parse");
+        assert!(
+            err.to_string().to_ascii_lowercase().contains("base64")
+                || err.to_string().to_ascii_lowercase().contains("invalid"),
+            "error message must indicate base64 decoding failed: {err}"
+        );
     }
 
     #[test]
