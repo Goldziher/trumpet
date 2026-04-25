@@ -189,10 +189,7 @@ async fn invoke_skill(
         .find_by_name(&name)
         .ok_or_else(|| Error::SkillNotFound { name: name.clone() })?;
 
-    Err(Error::SkillInvocationFailed {
-        name,
-        reason: "skill invocation not yet implemented".to_owned(),
-    })
+    Err(Error::SkillNotImplemented { name })
 }
 
 /// GET /events — SSE stream of domain events.

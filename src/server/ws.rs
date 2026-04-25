@@ -139,6 +139,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                     Some(Ok(Message::Close(_))) => {
                         tracing::debug!("WebSocket client sent close frame");
+                        let _ = sink.send(Message::Close(None)).await;
                         break;
                     }
                     Some(Ok(_)) => {

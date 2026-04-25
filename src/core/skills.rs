@@ -25,8 +25,8 @@ pub struct SkillRegistry {
 
 /// Validates a skill name against the allowed character set.
 ///
-/// Rules: 1–64 characters, ASCII alphanumeric plus hyphens, underscores,
-/// and dots, no leading or trailing hyphen or dot.
+/// Rules: 1–64 ASCII bytes, alphanumeric plus hyphens, underscores,
+/// and dots. No leading/trailing hyphen or dot, no consecutive dots.
 fn validate_name(name: &str) -> Result<(), Error> {
     if name.is_empty() {
         return Err(Error::SkillInvalidName {
@@ -53,6 +53,13 @@ fn validate_name(name: &str) -> Result<(), Error> {
         return Err(Error::SkillInvalidName {
             name: name.to_owned(),
             reason: "name must not start or end with a dot".to_owned(),
+        });
+    }
+
+    if name.contains("..") {
+        return Err(Error::SkillInvalidName {
+            name: name.to_owned(),
+            reason: "name must not contain consecutive dots".to_owned(),
         });
     }
 
@@ -101,7 +108,7 @@ impl SkillRegistry {
         validate_name(name)?;
 
         if description.is_empty() {
-            return Err(Error::SkillInvalidName {
+            return Err(Error::SkillInvalidDescription {
                 name: name.to_owned(),
                 reason: "description must not be empty".to_owned(),
             });
@@ -443,8 +450,27 @@ mod tests {
             .expect_err("empty description must be rejected");
 
         assert!(
-            matches!(err, Error::SkillInvalidName { ref name, .. } if name == "valid-name"),
-            "expected SkillInvalidName for empty description, got: {err:?}"
+            matches!(err, Error::SkillInvalidDescription { ref name, .. } if name == "valid-name"),
+            "expected SkillInvalidDescription for empty description, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_name_with_consecutive_dots_fails() {
+        let mut registry = make_registry();
+        let err = registry
+            .register(
+                "code..scan",
+                "desc",
+                null_schema(),
+                null_schema(),
+                SkillProvider::BuiltIn,
+            )
+            .expect_err("consecutive dots must be rejected");
+
+        assert!(
+            matches!(err, Error::SkillInvalidName { .. }),
+            "expected SkillInvalidName for consecutive dots, got: {err:?}"
         );
     }
 

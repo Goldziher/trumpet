@@ -93,9 +93,17 @@ pub enum Error {
     #[error("skill name '{name}' is invalid: {reason}")]
     SkillInvalidName { name: String, reason: String },
 
+    /// The provided skill description is empty or invalid.
+    #[error("skill '{name}' has invalid description: {reason}")]
+    SkillInvalidDescription { name: String, reason: String },
+
     /// Skill invocation failed.
     #[error("skill invocation failed for '{name}': {reason}")]
     SkillInvocationFailed { name: String, reason: String },
+
+    /// Skill invocation not yet implemented.
+    #[error("skill invocation not yet implemented for '{name}'")]
+    SkillNotImplemented { name: String },
 
     /// The agent providing the skill is not connected.
     #[error("skill provider unavailable for '{name}'")]
@@ -149,7 +157,9 @@ impl ErrorCode for Error {
             Self::SkillNotFoundById { .. } => "SKILL_NOT_FOUND_BY_ID",
             Self::SkillAlreadyRegistered { .. } => "SKILL_ALREADY_REGISTERED",
             Self::SkillInvalidName { .. } => "SKILL_INVALID_NAME",
+            Self::SkillInvalidDescription { .. } => "SKILL_INVALID_DESCRIPTION",
             Self::SkillInvocationFailed { .. } => "SKILL_INVOCATION_FAILED",
+            Self::SkillNotImplemented { .. } => "SKILL_NOT_IMPLEMENTED",
             Self::SkillProviderUnavailable { .. } => "SKILL_PROVIDER_UNAVAILABLE",
             Self::ConfigInvalidToml { .. } => "CONFIG_INVALID_TOML",
             Self::ConfigMissingDir { .. } => "CONFIG_MISSING_DIR",
@@ -179,8 +189,10 @@ impl ErrorCode for Error {
             | Self::SkillNotFound { .. }
             | Self::SkillNotFoundById { .. }
             | Self::ConfigMissingDir { .. } => StatusCode::NOT_FOUND,
+            Self::SkillNotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
             Self::AgentInvalidName { .. }
             | Self::SkillInvalidName { .. }
+            | Self::SkillInvalidDescription { .. }
             | Self::ConversationEmptyParticipants
             | Self::ConfigInvalidToml { .. }
             | Self::ConfigValidationFailed { .. } => StatusCode::UNPROCESSABLE_ENTITY,
@@ -251,8 +263,14 @@ impl ErrorCode for Error {
             Self::SkillInvalidName { .. } => {
                 "skill names must be 1-64 chars, alphanumeric plus hyphens, underscores, and dots; no leading/trailing hyphen or dot".to_owned()
             }
+            Self::SkillInvalidDescription { .. } => {
+                "skill description must not be empty".to_owned()
+            }
             Self::SkillInvocationFailed { name, reason } => {
                 format!("skill '{name}' failed to execute: {reason}")
+            }
+            Self::SkillNotImplemented { .. } => {
+                "skill invocation is not yet implemented".to_owned()
             }
             Self::SkillProviderUnavailable { name } => {
                 format!("the agent providing skill '{name}' is not currently connected; check agent status")
@@ -366,9 +384,16 @@ mod tests {
                 name: "-bad".to_owned(),
                 reason: "leading hyphen".to_owned(),
             },
+            Error::SkillInvalidDescription {
+                name: "scan".to_owned(),
+                reason: "empty".to_owned(),
+            },
             Error::SkillInvocationFailed {
                 name: "scan".to_owned(),
                 reason: "timeout".to_owned(),
+            },
+            Error::SkillNotImplemented {
+                name: "scan".to_owned(),
             },
             Error::SkillProviderUnavailable {
                 name: "scan".to_owned(),

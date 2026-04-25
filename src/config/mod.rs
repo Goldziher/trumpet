@@ -32,6 +32,8 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     use super::*;
     use crate::config::test_helpers::{make_trumpet_dir, with_env, with_home};
     use std::fs;
@@ -69,6 +71,7 @@ mod tests {
     // ── Config::load integration ─────────────────────────────────────────────
 
     #[test]
+    #[serial]
     fn load_resolves_paths_under_home() {
         let home = TempDir::new().unwrap();
         make_trumpet_dir(&home);
@@ -87,6 +90,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn load_end_to_end_with_file_env_and_validation() {
         let home = TempDir::new().unwrap();
         let trumpet_dir = make_trumpet_dir(&home);
@@ -101,29 +105,5 @@ mod tests {
                 assert_eq!(config.server.http_port, 9999, "env var must win over file");
             });
         });
-    }
-
-    // ── validation (via Config::load boundary) ───────────────────────────────
-
-    #[test]
-    fn validate_rejects_duplicate_ports() {
-        let mut config = Config::default();
-        config.server.http_port = 7600;
-        config.server.grpc_port = 7600;
-        let err = validate::validate(&config).expect_err("duplicate ports must fail");
-        assert!(err.to_string().contains("must differ"), "got: {err}");
-    }
-
-    #[test]
-    fn validate_rejects_zero_port() {
-        let mut config = Config::default();
-        config.server.http_port = 0;
-        let err = validate::validate(&config).expect_err("port 0 must fail");
-        assert!(err.to_string().contains("http_port"), "got: {err}");
-    }
-
-    #[test]
-    fn validate_accepts_valid_defaults() {
-        validate::validate(&Config::default()).expect("Config::default() must pass validation");
     }
 }

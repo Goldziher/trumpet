@@ -200,11 +200,14 @@ mod tests {
 
     use tempfile::TempDir;
 
+    use serial_test::serial;
+
     use super::*;
-    use crate::config::test_helpers::{make_trumpet_dir, with_env, with_home};
+    use crate::config::test_helpers::{make_trumpet_dir, with_cwd, with_env, with_home};
     use crate::config::types::{LogFormat, McpTransport};
 
     #[test]
+    #[serial]
     fn load_with_user_config_file() {
         let home = TempDir::new().unwrap();
         let trumpet_dir = make_trumpet_dir(&home);
@@ -234,6 +237,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn load_with_project_config_overrides_user() {
         let home = TempDir::new().unwrap();
         let trumpet_dir = make_trumpet_dir(&home);
@@ -254,18 +258,15 @@ http_port = 8080
         .unwrap();
 
         // Change working directory to project_dir so ./trumpet.toml is found.
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(project_dir.path()).unwrap();
-
-        with_home(&home, || {
-            let config = load_layered().expect("load_layered must succeed");
-            assert_eq!(
-                config.server.http_port, 9090,
-                "project config must override user config"
-            );
+        with_cwd(project_dir.path(), || {
+            with_home(&home, || {
+                let config = load_layered().expect("load_layered must succeed");
+                assert_eq!(
+                    config.server.http_port, 9090,
+                    "project config must override user config"
+                );
+            });
         });
-
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     // ------------------------------------------------------------------
@@ -273,6 +274,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn env_var_overrides_file() {
         let home = TempDir::new().unwrap();
         let trumpet_dir = make_trumpet_dir(&home);
@@ -299,6 +301,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn partial_toml_file_fills_defaults() {
         let home = TempDir::new().unwrap();
         let trumpet_dir = make_trumpet_dir(&home);
@@ -343,6 +346,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn env_var_trumpet_server_host_is_applied() {
         let home = TempDir::new().unwrap();
         make_trumpet_dir(&home);
@@ -356,6 +360,7 @@ http_port = 8080
     }
 
     #[test]
+    #[serial]
     fn env_var_trumpet_logging_format_json_is_applied() {
         let home = TempDir::new().unwrap();
         make_trumpet_dir(&home);
@@ -397,6 +402,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn missing_user_config_file_is_silently_skipped() {
         let home = TempDir::new().unwrap();
         // Do NOT create ~/.trumpet/config.toml.
@@ -411,6 +417,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn invalid_toml_in_user_config_returns_error() {
         let home = TempDir::new().unwrap();
         let trumpet_dir = make_trumpet_dir(&home);
@@ -430,6 +437,7 @@ http_port = 8080
     // ------------------------------------------------------------------
 
     #[test]
+    #[serial]
     fn storage_path_resolved_under_home() {
         let home = TempDir::new().unwrap();
         make_trumpet_dir(&home);
