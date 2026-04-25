@@ -8,12 +8,19 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use crate::core::{DefaultTaskRouter, TaskFacade, TaskFilter};
+use crate::core::task_types::{ContextId, TaskId};
+use crate::core::{DefaultTaskRouter, Event, TaskFacade, TaskFilter};
 use crate::grpc::convert;
 use crate::grpc::proto;
 use crate::server::AppState;
+
+/// Buffer size for the per-stream channel between the broadcast subscription
+/// and the gRPC client. Slow consumers cap memory at this many pending events
+/// before back-pressure pushes them off the broadcast bus instead.
+const STREAM_CHANNEL_CAPACITY: usize = 64;
 
 /// Trumpet's implementation of the A2A protocol service.
 #[derive(Clone)]
@@ -33,6 +40,78 @@ impl NexusA2aService {
             Arc::clone(&self.state.registry),
             Box::new(DefaultTaskRouter),
         )
+    }
+
+    /// Spawn a background task that subscribes to the message bus, filters
+    /// events for `task_id`, converts them to [`proto::StreamResponse`], and
+    /// forwards them on a freshly-created mpsc channel returned as a
+    /// [`ReceiverStream`].
+    ///
+    /// If `initial_task` is `Some`, the stream begins by yielding the full
+    /// task snapshot so the client never misses the initial state. The
+    /// snapshot is also retained inside the spawn closure as the cached
+    /// reference for artifact-update lookups; on each `TaskArtifactAdded`
+    /// event we re-fetch the task via the facade to get the latest
+    /// artifact body.
+    fn spawn_task_stream(
+        &self,
+        task_id: TaskId,
+        context_id: ContextId,
+        initial_task: Option<crate::core::Task>,
+    ) -> ReceiverStream<Result<proto::StreamResponse, Status>> {
+        let (tx, rx) = tokio::sync::mpsc::channel(STREAM_CHANNEL_CAPACITY);
+        let mut bus_rx = self.state.bus.subscribe();
+        let facade = self.make_facade();
+
+        tokio::spawn(async move {
+            // Emit initial task snapshot so the client never misses state.
+            if let Some(task) = initial_task.as_ref() {
+                let envelope = proto::StreamResponse {
+                    payload: Some(proto::stream_response::Payload::Task(
+                        convert::core_task_to_proto(task),
+                    )),
+                };
+                if tx.send(Ok(envelope)).await.is_err() {
+                    return;
+                }
+            }
+
+            let mut latest_task = initial_task;
+            loop {
+                let event = match bus_rx.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            task_id = %task_id,
+                            skipped = n,
+                            "stream subscriber lagged; events were dropped"
+                        );
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+
+                // Refresh cached task for artifact lookups when an artifact
+                // event arrives; the bus carries only the artifact id.
+                if matches!(&event, Event::TaskArtifactAdded { task_id: tid, .. } if *tid == task_id)
+                    && let Ok(refreshed) = facade.get_task(&task_id).await
+                {
+                    latest_task = Some(refreshed);
+                }
+
+                if let Some(envelope) = convert::task_event_to_stream_response(
+                    &event,
+                    &task_id,
+                    &context_id,
+                    latest_task.as_ref(),
+                ) && tx.send(Ok(envelope)).await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        ReceiverStream::new(rx)
     }
 }
 
@@ -79,11 +158,34 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
 
     async fn send_streaming_message(
         &self,
-        _request: Request<proto::SendMessageRequest>,
+        request: Request<proto::SendMessageRequest>,
     ) -> Result<Response<Self::SendStreamingMessageStream>, Status> {
-        Err(Status::unimplemented(
-            "send_streaming_message not yet implemented",
-        ))
+        let req = request.into_inner();
+        let proto_msg = req
+            .message
+            .ok_or_else(|| Status::invalid_argument("message is required"))?;
+
+        let core_msg = convert::proto_message_to_core(&proto_msg)?;
+
+        let context_id = if proto_msg.context_id.is_empty() {
+            None
+        } else {
+            Some(
+                proto_msg
+                    .context_id
+                    .parse()
+                    .map_err(|_| Status::invalid_argument("invalid context_id"))?,
+            )
+        };
+
+        let facade = self.make_facade();
+        let task = facade
+            .submit_task(core_msg, context_id, None, None)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let stream = self.spawn_task_stream(task.id, task.context_id, Some(task));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn get_task(
@@ -133,19 +235,52 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             assignee: None,
         };
 
-        let facade = self.make_facade();
-        let tasks = facade.list_tasks(&filter).await;
-        let proto_tasks: Vec<proto::Task> = tasks.iter().map(convert::core_task_to_proto).collect();
-        let total = proto_tasks.len() as i32;
+        // Cursor pagination: tasks are returned in stable id order; the
+        // page_token is the id of the last item from the previous page.
+        // Clients should treat it as opaque and round-trip it unchanged.
+        let page_size = req.page_size.unwrap_or(50).clamp(1, 100) as usize;
 
-        // TODO: implement pagination (page_size, page_token) per A2A spec.
-        // Currently returns all matching tasks in a single page.
-        let requested_page_size = req.page_size.unwrap_or(50).clamp(1, 100);
+        let facade = self.make_facade();
+        let mut tasks = facade.list_tasks(&filter).await;
+        tasks.sort_by_key(|t| t.id);
+
+        let total_size = i32::try_from(tasks.len()).unwrap_or_else(|_| {
+            tracing::warn!(
+                count = tasks.len(),
+                "task count exceeds i32::MAX; reporting i32::MAX"
+            );
+            i32::MAX
+        });
+
+        let start_idx = if req.page_token.is_empty() {
+            0
+        } else {
+            tasks
+                .iter()
+                .position(|t| t.id.to_string() > req.page_token)
+                .unwrap_or(tasks.len())
+        };
+        let end_idx = start_idx.saturating_add(page_size).min(tasks.len());
+        let page_slice = &tasks[start_idx..end_idx];
+
+        let next_page_token = if end_idx < tasks.len() {
+            page_slice
+                .last()
+                .map(|t| t.id.to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let proto_tasks: Vec<proto::Task> =
+            page_slice.iter().map(convert::core_task_to_proto).collect();
+        let returned_page_size = i32::try_from(proto_tasks.len()).unwrap_or(i32::MAX);
+
         Ok(Response::new(proto::ListTasksResponse {
             tasks: proto_tasks,
-            next_page_token: String::new(),
-            page_size: requested_page_size,
-            total_size: total,
+            next_page_token,
+            page_size: returned_page_size,
+            total_size,
         }))
     }
 
@@ -178,11 +313,22 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
 
     async fn subscribe_to_task(
         &self,
-        _request: Request<proto::SubscribeToTaskRequest>,
+        request: Request<proto::SubscribeToTaskRequest>,
     ) -> Result<Response<Self::SubscribeToTaskStream>, Status> {
-        Err(Status::unimplemented(
-            "subscribe_to_task not yet implemented",
-        ))
+        let req = request.into_inner();
+        let task_id: TaskId = req
+            .id
+            .parse()
+            .map_err(|_| Status::invalid_argument("invalid task id"))?;
+
+        let facade = self.make_facade();
+        let task = facade
+            .get_task(&task_id)
+            .await
+            .map_err(|e| Status::not_found(e.to_string()))?;
+
+        let stream = self.spawn_task_stream(task.id, task.context_id, Some(task));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn create_task_push_notification_config(
@@ -250,7 +396,7 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             documentation_url: None,
             capabilities: Some(proto::AgentCapabilities {
-                streaming: Some(false),
+                streaming: Some(true),
                 push_notifications: Some(false),
                 extensions: vec![],
                 extended_agent_card: Some(true),
@@ -360,5 +506,225 @@ mod tests {
         let result = proto::a2a_service_server::A2aService::send_message(&svc, req).await;
         assert!(result.is_err(), "missing message must return error");
         assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── pagination ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_tasks_paginates_with_cursor() {
+        let svc = make_service();
+
+        // Create 5 tasks via send_message.
+        for i in 0..5 {
+            let msg = proto::Message {
+                message_id: uuid::Uuid::new_v4().to_string(),
+                role: proto::Role::User.into(),
+                parts: vec![proto::Part {
+                    content: Some(proto::part::Content::Text(format!("msg{i}"))),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            proto::a2a_service_server::A2aService::send_message(
+                &svc,
+                Request::new(proto::SendMessageRequest {
+                    message: Some(msg),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("send must succeed");
+        }
+
+        // First page: size 2.
+        let page1 = proto::a2a_service_server::A2aService::list_tasks(
+            &svc,
+            Request::new(proto::ListTasksRequest {
+                page_size: Some(2),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("list must succeed")
+        .into_inner();
+
+        assert_eq!(page1.tasks.len(), 2, "first page must contain 2 items");
+        assert_eq!(page1.page_size, 2, "page_size must reflect actual count");
+        assert_eq!(page1.total_size, 5, "total_size must reflect total count");
+        assert!(
+            !page1.next_page_token.is_empty(),
+            "next_page_token must be non-empty when more pages exist"
+        );
+
+        // Second page using the cursor.
+        let page2 = proto::a2a_service_server::A2aService::list_tasks(
+            &svc,
+            Request::new(proto::ListTasksRequest {
+                page_size: Some(2),
+                page_token: page1.next_page_token.clone(),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("list page 2 must succeed")
+        .into_inner();
+
+        assert_eq!(page2.tasks.len(), 2, "second page must contain 2 items");
+        assert!(
+            !page2.next_page_token.is_empty(),
+            "third page should still exist (1 item left)"
+        );
+        // Different items than page 1.
+        let page1_ids: std::collections::HashSet<_> =
+            page1.tasks.iter().map(|t| t.id.clone()).collect();
+        for t in &page2.tasks {
+            assert!(
+                !page1_ids.contains(&t.id),
+                "page 2 must not duplicate page 1 items"
+            );
+        }
+
+        // Third page: 1 remaining item, no further token.
+        let page3 = proto::a2a_service_server::A2aService::list_tasks(
+            &svc,
+            Request::new(proto::ListTasksRequest {
+                page_size: Some(2),
+                page_token: page2.next_page_token.clone(),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("list page 3 must succeed")
+        .into_inner();
+
+        assert_eq!(page3.tasks.len(), 1, "third page must contain 1 item");
+        assert!(
+            page3.next_page_token.is_empty(),
+            "next_page_token must be empty on the last page"
+        );
+    }
+
+    // ── streaming ──────────────────────────────────────────────────────────────
+
+    fn text_message() -> proto::Message {
+        proto::Message {
+            message_id: uuid::Uuid::new_v4().to_string(),
+            role: proto::Role::User.into(),
+            parts: vec![proto::Part {
+                content: Some(proto::part::Content::Text("hello".to_owned())),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn send_streaming_message_yields_initial_task() {
+        use tokio_stream::StreamExt as _;
+
+        let svc = make_service();
+        let req = Request::new(proto::SendMessageRequest {
+            message: Some(text_message()),
+            ..Default::default()
+        });
+        let resp = proto::a2a_service_server::A2aService::send_streaming_message(&svc, req)
+            .await
+            .expect("streaming send must start");
+
+        let mut stream = resp.into_inner();
+        let first = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next())
+            .await
+            .expect("initial event must arrive within 200ms")
+            .expect("stream must yield at least one item")
+            .expect("first item must be Ok");
+
+        assert!(matches!(
+            first.payload,
+            Some(proto::stream_response::Payload::Task(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn subscribe_to_unknown_task_returns_not_found() {
+        let svc = make_service();
+        let req = Request::new(proto::SubscribeToTaskRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        });
+        let result = proto::a2a_service_server::A2aService::subscribe_to_task(&svc, req).await;
+        // Stream response type is not Debug, so use a manual match instead of
+        // unwrap_err.
+        match result {
+            Err(status) => assert_eq!(status.code(), tonic::Code::NotFound),
+            Ok(_) => panic!("expected NotFound, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn subscribe_yields_status_update_when_task_progresses() {
+        use tokio_stream::StreamExt as _;
+
+        let svc = make_service();
+
+        // Create a task first.
+        let send = proto::a2a_service_server::A2aService::send_message(
+            &svc,
+            Request::new(proto::SendMessageRequest {
+                message: Some(text_message()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("send_message must succeed");
+
+        let task_id = match send.into_inner().payload {
+            Some(proto::send_message_response::Payload::Task(t)) => t.id,
+            other => panic!("expected Task payload, got: {other:?}"),
+        };
+
+        // Subscribe.
+        let resp = proto::a2a_service_server::A2aService::subscribe_to_task(
+            &svc,
+            Request::new(proto::SubscribeToTaskRequest {
+                id: task_id.clone(),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("subscribe must succeed");
+
+        let mut stream = resp.into_inner();
+
+        // Drain the initial task snapshot.
+        let _initial = tokio::time::timeout(std::time::Duration::from_millis(200), stream.next())
+            .await
+            .expect("initial event must arrive")
+            .expect("stream must yield")
+            .expect("first item must be Ok");
+
+        // Trigger a state change via the facade.
+        let facade = svc.make_facade();
+        let parsed: TaskId = task_id.parse().unwrap();
+        facade
+            .update_status(&parsed, crate::core::TaskState::Working, None)
+            .await
+            .expect("state update must succeed");
+
+        let next = tokio::time::timeout(std::time::Duration::from_millis(500), stream.next())
+            .await
+            .expect("status update must arrive within 500ms")
+            .expect("stream must yield")
+            .expect("event must be Ok");
+
+        match next.payload {
+            Some(proto::stream_response::Payload::StatusUpdate(update)) => {
+                assert_eq!(update.task_id, task_id);
+                assert_eq!(
+                    update.status.expect("status").state,
+                    proto::TaskState::Working as i32
+                );
+            }
+            other => panic!("expected StatusUpdate, got: {other:?}"),
+        }
     }
 }

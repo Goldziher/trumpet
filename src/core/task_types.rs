@@ -15,7 +15,7 @@ use crate::core::types::{AgentId, MessageId};
 // ---------------------------------------------------------------------------
 
 /// Unique identifier for a task.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TaskId(Uuid);
 
 impl TaskId {
