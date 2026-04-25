@@ -37,4 +37,43 @@ impl AppState {
             config: Arc::new(config),
         }
     }
+
+    /// Collect a point-in-time [`StateSnapshot`] from all in-memory registries.
+    pub async fn to_snapshot(&self) -> crate::state::StateSnapshot {
+        let registry = self.registry.read().await;
+        let chat = self.chat.read().await;
+        let skills = self.skills.read().await;
+
+        let agents = registry.list().into_iter().cloned().collect();
+        let skill_list = skills.list().into_iter().cloned().collect();
+        let conversations: Vec<_> = chat.list_conversations().into_iter().cloned().collect();
+        let messages = conversations
+            .iter()
+            .filter_map(|conv| {
+                chat.get_messages(&conv.id)
+                    .ok()
+                    .map(|msgs| (conv.id, msgs.to_vec()))
+            })
+            .collect();
+
+        crate::state::StateSnapshot {
+            agents,
+            skills: skill_list,
+            conversations,
+            messages,
+        }
+    }
+
+    /// Apply a [`StateSnapshot`] to all in-memory registries.
+    ///
+    /// Existing state is discarded; no bus events are published during restore.
+    pub async fn restore_from_snapshot(&self, snapshot: crate::state::StateSnapshot) {
+        let mut registry = self.registry.write().await;
+        let mut chat = self.chat.write().await;
+        let mut skills = self.skills.write().await;
+
+        registry.restore(snapshot.agents);
+        skills.restore(snapshot.skills);
+        chat.restore(snapshot.conversations, snapshot.messages);
+    }
 }

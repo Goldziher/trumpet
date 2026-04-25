@@ -109,6 +109,15 @@ pub enum Error {
     #[error("skill provider unavailable for '{name}'")]
     SkillProviderUnavailable { name: String },
 
+    // ── State ─────────────────────────────────────────────────────────────────
+    /// Writing a state snapshot to persistent storage failed.
+    #[error("state snapshot failed: {reason}")]
+    StateSnapshotFailed { reason: String },
+
+    /// Restoring state from a snapshot failed.
+    #[error("state restore failed: {reason}")]
+    StateRestoreFailed { reason: String },
+
     // ── Config ────────────────────────────────────────────────────────────────
     /// The config file contains invalid TOML.
     #[error("invalid TOML in config file '{path}': {reason}")]
@@ -161,6 +170,8 @@ impl ErrorCode for Error {
             Self::SkillInvocationFailed { .. } => "SKILL_INVOCATION_FAILED",
             Self::SkillNotImplemented { .. } => "SKILL_NOT_IMPLEMENTED",
             Self::SkillProviderUnavailable { .. } => "SKILL_PROVIDER_UNAVAILABLE",
+            Self::StateSnapshotFailed { .. } => "STATE_SNAPSHOT_FAILED",
+            Self::StateRestoreFailed { .. } => "STATE_RESTORE_FAILED",
             Self::ConfigInvalidToml { .. } => "CONFIG_INVALID_TOML",
             Self::ConfigMissingDir { .. } => "CONFIG_MISSING_DIR",
             Self::ConfigPermissionDenied { .. } => "CONFIG_PERMISSION_DENIED",
@@ -183,7 +194,9 @@ impl ErrorCode for Error {
             | Self::ConnectionRefused
             | Self::ConnectionTimeout { .. }
             | Self::ConnectionSocketNotFound { .. } => StatusCode::BAD_GATEWAY,
-            Self::SkillInvocationFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::SkillInvocationFailed { .. }
+            | Self::StateSnapshotFailed { .. }
+            | Self::StateRestoreFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::AgentNotFound { .. }
             | Self::ConversationNotFound { .. }
             | Self::SkillNotFound { .. }
@@ -274,6 +287,12 @@ impl ErrorCode for Error {
             }
             Self::SkillProviderUnavailable { name } => {
                 format!("the agent providing skill '{name}' is not currently connected; check agent status")
+            }
+            Self::StateSnapshotFailed { reason } => {
+                format!("snapshot write failed: {reason}; check storage path permissions and disk space")
+            }
+            Self::StateRestoreFailed { reason } => {
+                format!("snapshot restore failed: {reason}; the snapshot may be corrupt — delete it to start fresh")
             }
             Self::ConfigInvalidToml { path, .. } => {
                 format!("fix the TOML syntax error in '{path}'; run `trumpet config validate` for details")
@@ -397,6 +416,12 @@ mod tests {
             },
             Error::SkillProviderUnavailable {
                 name: "scan".to_owned(),
+            },
+            Error::StateSnapshotFailed {
+                reason: "disk full".to_owned(),
+            },
+            Error::StateRestoreFailed {
+                reason: "corrupt data".to_owned(),
             },
             Error::ConfigInvalidToml {
                 path: "~/.trumpet/config.toml".to_owned(),

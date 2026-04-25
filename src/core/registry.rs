@@ -140,6 +140,19 @@ impl AgentRegistry {
         let id = self.name_index.get(name)?;
         self.agents.get(id)
     }
+
+    /// Clear all entries and repopulate from `agents`.
+    ///
+    /// Used during daemon startup to restore persisted state. No bus events
+    /// are published.
+    pub fn restore(&mut self, agents: Vec<AgentInfo>) {
+        self.agents.clear();
+        self.name_index.clear();
+        for info in agents {
+            self.name_index.insert(info.name.clone(), info.id);
+            self.agents.insert(info.id, info);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +342,42 @@ mod tests {
         assert!(
             registry.find_by_name("ghost").is_none(),
             "find_by_name must return None when name is not registered"
+        );
+    }
+
+    // ── restore ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn restore_populates_registry() {
+        let mut registry = make_registry();
+        let id1 = AgentId::new();
+        let id2 = AgentId::new();
+        let agents = vec![
+            AgentInfo {
+                id: id1,
+                name: "alpha".to_owned(),
+                registered_at: Utc::now(),
+                status: AgentStatus::Connected,
+            },
+            AgentInfo {
+                id: id2,
+                name: "beta".to_owned(),
+                registered_at: Utc::now(),
+                status: AgentStatus::Disconnected,
+            },
+        ];
+
+        registry.restore(agents);
+
+        assert_eq!(registry.list().len(), 2, "restore must populate 2 agents");
+        assert!(
+            registry.find_by_name("alpha").is_some(),
+            "find_by_name must locate restored agent"
+        );
+        assert_eq!(
+            registry.find_by_name("alpha").unwrap().id,
+            id1,
+            "restored agent id must match"
         );
     }
 

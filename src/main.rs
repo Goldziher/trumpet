@@ -7,6 +7,10 @@ use trumpet::error::CliFormatter;
 enum Cli {
     /// Start the trumpet daemon in the foreground.
     Serve,
+    /// Start the trumpet daemon in the background.
+    Start,
+    /// Stop the trumpet daemon.
+    Stop,
     /// Show daemon status and connected agents.
     Status,
 }
@@ -22,6 +26,8 @@ async fn main() {
 
     let result = match Cli::parse() {
         Cli::Serve => trumpet::cli::run_serve().await,
+        Cli::Start => trumpet::cli::run_start().await,
+        Cli::Stop => trumpet::cli::run_stop().await,
         Cli::Status => trumpet::cli::run_status().await,
     };
 

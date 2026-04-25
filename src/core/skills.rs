@@ -172,6 +172,19 @@ impl SkillRegistry {
         let id = self.name_index.get(name)?;
         self.skills.get(id)
     }
+
+    /// Clear all entries and repopulate from `skills`.
+    ///
+    /// Used during daemon startup to restore persisted state. No bus events
+    /// are published.
+    pub fn restore(&mut self, skills: Vec<SkillInfo>) {
+        self.skills.clear();
+        self.name_index.clear();
+        for info in skills {
+            self.name_index.insert(info.name.clone(), info.id);
+            self.skills.insert(info.id, info);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -569,6 +582,41 @@ mod tests {
         assert!(
             registry.find_by_name("ghost").is_none(),
             "find_by_name must return None when name is not registered"
+        );
+    }
+
+    // ── restore ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn restore_populates_skill_registry() {
+        let mut registry = make_registry();
+        let id1 = SkillId::new();
+        let skills = vec![
+            SkillInfo {
+                id: id1,
+                name: "skill-one".to_owned(),
+                description: "first".to_owned(),
+                input_schema: null_schema(),
+                output_schema: null_schema(),
+                provider: SkillProvider::BuiltIn,
+            },
+            SkillInfo {
+                id: SkillId::new(),
+                name: "skill-two".to_owned(),
+                description: "second".to_owned(),
+                input_schema: null_schema(),
+                output_schema: null_schema(),
+                provider: SkillProvider::BuiltIn,
+            },
+        ];
+
+        registry.restore(skills);
+
+        assert_eq!(registry.list().len(), 2, "restore must populate 2 skills");
+        assert_eq!(
+            registry.find_by_name("skill-one").unwrap().id,
+            id1,
+            "restored skill id must match"
         );
     }
 

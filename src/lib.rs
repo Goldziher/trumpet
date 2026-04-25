@@ -5,3 +5,4 @@ pub mod daemon;
 pub mod error;
 pub mod grpc;
 pub mod server;
+pub mod state;

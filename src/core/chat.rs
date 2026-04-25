@@ -144,6 +144,25 @@ impl ChatManager {
             .filter(|conv| conv.participants.contains(agent_id))
             .collect()
     }
+
+    /// Clear all conversations and messages, then repopulate.
+    ///
+    /// Used during daemon startup to restore persisted state. No bus events
+    /// are published.
+    pub fn restore(
+        &mut self,
+        conversations: Vec<Conversation>,
+        messages: Vec<(ConversationId, Vec<ChatMessage>)>,
+    ) {
+        self.conversations.clear();
+        self.messages.clear();
+        for conv in conversations {
+            self.conversations.insert(conv.id, conv);
+        }
+        for (conv_id, msgs) in messages {
+            self.messages.insert(conv_id, msgs);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +344,45 @@ mod tests {
             results[0].id, conv_a.id,
             "agent_a's conversation must be conv-a"
         );
+    }
+
+    // ── restore ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn restore_populates_conversations_and_messages() {
+        use std::collections::HashSet;
+
+        let mut mgr = ChatManager::new(make_bus());
+        let agent = make_agent();
+        let conv_id = ConversationId::new();
+        let msg_id = MessageId::new();
+
+        let conv = Conversation {
+            id: conv_id,
+            name: Some("restored".to_owned()),
+            participants: HashSet::from([agent]),
+            created_at: chrono::Utc::now(),
+        };
+        let msg = ChatMessage {
+            id: msg_id,
+            conversation_id: conv_id,
+            sender: agent,
+            content: "restored message".to_owned(),
+            timestamp: chrono::Utc::now(),
+        };
+
+        mgr.restore(vec![conv], vec![(conv_id, vec![msg])]);
+
+        let found = mgr
+            .get_conversation(&conv_id)
+            .expect("conversation must exist");
+        assert_eq!(found.id, conv_id);
+        assert_eq!(found.name.as_deref(), Some("restored"));
+
+        let msgs = mgr.get_messages(&conv_id).expect("messages must exist");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, msg_id);
+        assert_eq!(msgs[0].content, "restored message");
     }
 
     // ── get_messages ordering ─────────────────────────────────────────────────
