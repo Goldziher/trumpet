@@ -23,10 +23,14 @@ pub(crate) fn load_layered() -> Result<Config, ConfigError> {
     // do deep-merge on top of it.
     let mut base = to_value_table(&Config::default());
 
-    // User config: ~/.trumpet/config.toml
-    let home = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
+    // User config: ~/.trumpet/config.toml. HOME is required — silently
+    // falling back to /tmp would place the config (and later the auth token,
+    // PID, and snapshot data) inside a world-writable directory.
+    let home = std::env::var("HOME").map(PathBuf::from).map_err(|_| {
+        ConfigError::ValidationFailed(
+            "HOME environment variable is not set; cannot locate user config directory".to_owned(),
+        )
+    })?;
     let user_path = home.join(".trumpet").join("config.toml");
     if user_path.exists() {
         debug!(path = %user_path.display(), "loading user config");
@@ -191,6 +195,14 @@ fn resolve_paths(config: &mut Config, home: &Path) {
     let storage_default = crate::config::types::StorageConfig::default();
     if config.storage.path == storage_default.path {
         config.storage.path = base.join("state");
+    }
+
+    // Default workspace_root to the daemon's current working directory so the
+    // sandbox check in code_tools has something to anchor on.
+    if config.code_tools.workspace_root.is_none()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        config.code_tools.workspace_root = Some(cwd);
     }
 }
 
@@ -430,6 +442,31 @@ http_port = 8080
                 "expected InvalidToml, got: {err}"
             );
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Missing HOME is a hard error
+    // ------------------------------------------------------------------
+
+    #[test]
+    #[serial]
+    fn missing_home_returns_validation_error() {
+        // Save and unset HOME so the loader's `?` short-circuits.
+        let prev = std::env::var("HOME").ok();
+        // SAFETY: serial_test ensures no concurrent env mutation.
+        unsafe { std::env::remove_var("HOME") };
+
+        let err = load_layered().expect_err("missing HOME must produce ValidationFailed");
+        assert!(
+            matches!(err, ConfigError::ValidationFailed(ref msg) if msg.contains("HOME")),
+            "expected ValidationFailed mentioning HOME, got: {err}"
+        );
+
+        // Restore.
+        if let Some(v) = prev {
+            // SAFETY: serial_test ensures no concurrent env mutation.
+            unsafe { std::env::set_var("HOME", v) };
+        }
     }
 
     // ------------------------------------------------------------------

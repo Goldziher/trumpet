@@ -71,7 +71,7 @@ pub async fn serve(config: &Config) -> Result<()> {
     }
 
     // ── Register built-in code tools ───────────────────────────────────────
-    register_code_tools(&state, config).await;
+    register_code_tools(&state, config).await?;
 
     // ── gRPC server ──────────────────────────────────────────────────────────
     let grpc_addr = format!("{}:{}", config.server.host, config.server.grpc_port);
@@ -172,8 +172,8 @@ pub async fn serve(config: &Config) -> Result<()> {
 }
 
 /// Register built-in code intelligence tools in the tool registry.
-async fn register_code_tools(state: &AppState, config: &Config) {
-    let code_tools = CodeTools::new(config.code_tools.clone());
+async fn register_code_tools(state: &AppState, config: &Config) -> Result<()> {
+    let code_tools = CodeTools::new(config.code_tools.clone())?;
     let mut tools = state.tools.write().await;
 
     let builtin_tools = [
@@ -206,31 +206,48 @@ async fn register_code_tools(state: &AppState, config: &Config) {
     // Store the CodeTools instance in AppState for later invocation.
     drop(tools);
     *state.code_tools.write().await = Some(code_tools);
+    Ok(())
 }
 
 /// Resolves when Ctrl-C or SIGTERM is received.
+///
+/// On Unix, races Ctrl-C against SIGTERM via `tokio::select!`. If SIGTERM
+/// registration fails (rare, but possible under restrictive seccomp profiles
+/// or low file-descriptor limits), the function logs a warning and falls back
+/// to Ctrl-C-only behaviour rather than panicking and crashing the daemon.
 async fn shutdown_signal() {
-    let ctrl_c = tokio::signal::ctrl_c();
-
     #[cfg(unix)]
     {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
-        tokio::select! {
-            result = ctrl_c => {
-                if let Err(e) = result {
-                    tracing::error!(error = %e, "failed to install Ctrl+C handler");
+        let ctrl_c = tokio::signal::ctrl_c();
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    result = ctrl_c => {
+                        if let Err(e) = result {
+                            tracing::error!(error = %e, "Ctrl+C handler failed");
+                            return;
+                        }
+                    }
+                    _ = sigterm.recv() => {}
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to install SIGTERM handler; falling back to Ctrl+C only"
+                );
+                if let Err(err) = ctrl_c.await {
+                    tracing::error!(error = %err, "Ctrl+C handler failed");
                     return;
                 }
             }
-            _ = sigterm.recv() => {}
         }
     }
 
     #[cfg(not(unix))]
     {
-        if let Err(e) = ctrl_c.await {
-            tracing::error!(error = %e, "failed to install Ctrl+C handler");
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "Ctrl+C handler failed");
             return;
         }
     }

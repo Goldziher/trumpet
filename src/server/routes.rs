@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
@@ -374,6 +374,13 @@ async fn events(
 // ── Router ────────────────────────────────────────────────────────────────────
 
 /// Build the axum [`Router`] with all routes wired up and `state` attached.
+/// Maximum HTTP request body size accepted by the daemon (1 MiB).
+///
+/// Requests exceeding this limit are rejected with HTTP 413. Tool invocation
+/// payloads, task message bodies, and chat messages all share this cap; agents
+/// that need to transfer larger payloads should reference an artifact instead.
+pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
@@ -397,6 +404,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tasks/{id}/cancel", post(cancel_task_handler))
         .route("/events", get(events))
         .route("/ws", get(ws::ws_handler))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }
 
@@ -507,6 +515,39 @@ mod tests {
         assert!(
             json.contains("agent_registered"),
             "JSON must contain event type tag"
+        );
+    }
+
+    /// Posting a body larger than [`MAX_REQUEST_BODY_BYTES`] must yield 413.
+    #[tokio::test]
+    async fn oversized_request_body_is_rejected_with_413() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt as _;
+
+        use crate::config::Config;
+
+        let app = router(AppState::new(Config::default()));
+
+        // 2 MiB payload — exceeds the 1 MiB cap.
+        let oversized = vec![b'x'; MAX_REQUEST_BODY_BYTES + 1024];
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(oversized))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("router must respond");
+
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "oversized body must be rejected with 413"
         );
     }
 }

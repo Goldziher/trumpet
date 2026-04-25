@@ -185,6 +185,14 @@ pub struct CodeToolsConfig {
     pub max_files_per_page: u32,
     /// Maximum number of search matches returned.
     pub max_search_matches: u32,
+    /// Sandbox root for filesystem access. All paths supplied to code tools
+    /// must canonicalize to a descendant of this directory.
+    ///
+    /// When `None`, the loader populates it with the daemon's current working
+    /// directory at startup. Callers that construct [`CodeToolsConfig`]
+    /// programmatically must set this explicitly or accept the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<PathBuf>,
 }
 
 impl Default for CodeToolsConfig {
@@ -193,6 +201,7 @@ impl Default for CodeToolsConfig {
             max_file_size_bytes: 1_048_576,
             max_files_per_page: 500,
             max_search_matches: 1000,
+            workspace_root: None,
         }
     }
 }

@@ -3,8 +3,13 @@
 //! Provides built-in tools for repository scanning, file reading, and code
 //! structure parsing. All CPU-bound work is offloaded to
 //! [`tokio::task::spawn_blocking`] so the async runtime stays unblocked.
+//!
+//! All filesystem access is sandboxed to a configurable workspace root (see
+//! [`CodeToolsConfig::workspace_root`]). Caller-supplied paths are resolved
+//! relative to the root, canonicalised, and rejected unless they remain
+//! descendants of the root after symlink resolution.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tree_sitter_language_pack::{ProcessConfig, detect_language_from_path, process};
@@ -103,19 +108,88 @@ fn count_lines(content: &str) -> usize {
 /// Built-in code intelligence tools backed by tree-sitter.
 ///
 /// Construct with [`CodeTools::new`] and supply a [`CodeToolsConfig`] to
-/// control file-size and pagination limits.
+/// control file-size, pagination limits, and the workspace sandbox root.
+#[derive(Debug)]
 pub struct CodeTools {
     config: CodeToolsConfig,
+    /// Canonicalised sandbox root. All caller-supplied paths must resolve
+    /// to a descendant of this directory.
+    workspace_root: PathBuf,
 }
 
 impl CodeTools {
     /// Create a new [`CodeTools`] instance with the given configuration.
-    pub fn new(config: CodeToolsConfig) -> Self {
-        Self { config }
+    ///
+    /// The configured `workspace_root` is canonicalised at construction time
+    /// to ensure later sandbox checks compare against an absolute path with
+    /// symlinks resolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidationFailed`] when `workspace_root` is
+    /// `None` or fails to canonicalise (e.g. the directory does not exist).
+    pub fn new(config: CodeToolsConfig) -> Result<Self, Error> {
+        let raw_root =
+            config
+                .workspace_root
+                .as_ref()
+                .ok_or_else(|| Error::ConfigValidationFailed {
+                    reason: "code_tools.workspace_root is required".to_owned(),
+                })?;
+        let workspace_root =
+            std::fs::canonicalize(raw_root).map_err(|e| Error::ConfigValidationFailed {
+                reason: format!(
+                    "code_tools.workspace_root '{}' is not a valid directory: {e}",
+                    raw_root.display()
+                ),
+            })?;
+        Ok(Self {
+            config,
+            workspace_root,
+        })
+    }
+
+    /// Resolve a caller-supplied path against the workspace sandbox.
+    ///
+    /// Relative paths are joined with the workspace root; absolute paths are
+    /// taken as-is. The result is then canonicalised (resolving symlinks)
+    /// and checked to be a descendant of the workspace root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ToolInvocationFailed`] when the path cannot be
+    /// canonicalised (typically a missing file) or escapes the sandbox root.
+    fn resolve_safe_path(&self, tool_name: &str, raw: &str) -> Result<PathBuf, Error> {
+        let candidate = {
+            let p = Path::new(raw);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                self.workspace_root.join(p)
+            }
+        };
+        let canonical =
+            std::fs::canonicalize(&candidate).map_err(|e| Error::ToolInvocationFailed {
+                name: tool_name.to_owned(),
+                reason: format!("path '{raw}' could not be resolved: {e}"),
+            })?;
+        if !canonical.starts_with(&self.workspace_root) {
+            return Err(Error::ToolInvocationFailed {
+                name: tool_name.to_owned(),
+                reason: format!(
+                    "path '{raw}' resolves outside the workspace sandbox '{}'",
+                    self.workspace_root.display()
+                ),
+            });
+        }
+        Ok(canonical)
     }
 
     /// Walk the directory tree at `path` and return metadata for each source
     /// file found.
+    ///
+    /// `path` is resolved against the configured workspace sandbox; paths
+    /// that escape the sandbox are rejected.
     ///
     /// Files larger than [`CodeToolsConfig::max_file_size_bytes`] or detected
     /// as binary are skipped. Results are capped at
@@ -124,14 +198,15 @@ impl CodeTools {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InternalUnexpected`] if the blocking task panics or I/O
+    /// Returns [`Error::ToolInvocationFailed`] when sandbox resolution fails,
+    /// or [`Error::InternalUnexpected`] if the blocking task panics or I/O
     /// fails.
     pub async fn scan_repo(&self, path: &str) -> Result<ScanResult, Error> {
-        let path = path.to_owned();
+        let resolved = self.resolve_safe_path("code.scan_repo", path)?;
         let max_size = self.config.max_file_size_bytes;
         let max_files = self.config.max_files_per_page as usize;
 
-        tokio::task::spawn_blocking(move || scan_repo_blocking(&path, max_size, max_files))
+        tokio::task::spawn_blocking(move || scan_repo_blocking(&resolved, max_size, max_files))
             .await
             .map_err(|e| Error::InternalUnexpected {
                 reason: format!("scan_repo task panicked: {e}"),
@@ -140,15 +215,19 @@ impl CodeTools {
 
     /// Read `path` and return its content along with detected language metadata.
     ///
+    /// `path` is resolved against the configured workspace sandbox; paths
+    /// that escape the sandbox are rejected.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::InternalUnexpected`] if the file cannot be read or the
+    /// Returns [`Error::ToolInvocationFailed`] when sandbox resolution fails,
+    /// or [`Error::InternalUnexpected`] if the file cannot be read or the
     /// blocking task panics.
     pub async fn read_file(&self, path: &str) -> Result<ReadResult, Error> {
-        let path = path.to_owned();
+        let resolved = self.resolve_safe_path("code.read_file", path)?;
         let max_size = self.config.max_file_size_bytes;
 
-        tokio::task::spawn_blocking(move || read_file_blocking(&path, max_size))
+        tokio::task::spawn_blocking(move || read_file_blocking(&resolved, max_size))
             .await
             .map_err(|e| Error::InternalUnexpected {
                 reason: format!("read_file task panicked: {e}"),
@@ -157,17 +236,20 @@ impl CodeTools {
 
     /// Parse `path` with tree-sitter and return the extracted code structure.
     ///
-    /// Files larger than [`CodeToolsConfig::max_file_size_bytes`] are rejected.
+    /// `path` is resolved against the configured workspace sandbox; paths
+    /// that escape the sandbox are rejected. Files larger than
+    /// [`CodeToolsConfig::max_file_size_bytes`] are also rejected.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InternalUnexpected`] if the file cannot be read,
+    /// Returns [`Error::ToolInvocationFailed`] when sandbox resolution fails,
+    /// or [`Error::InternalUnexpected`] if the file cannot be read,
     /// exceeds the size limit, or tree-sitter parsing fails.
     pub async fn parse_file(&self, path: &str) -> Result<ParseResult, Error> {
-        let path = path.to_owned();
+        let resolved = self.resolve_safe_path("code.parse_file", path)?;
         let max_size = self.config.max_file_size_bytes;
 
-        tokio::task::spawn_blocking(move || parse_file_blocking(&path, max_size))
+        tokio::task::spawn_blocking(move || parse_file_blocking(&resolved, max_size))
             .await
             .map_err(|e| Error::InternalUnexpected {
                 reason: format!("parse_file task panicked: {e}"),
@@ -221,17 +303,11 @@ impl CodeTools {
 
 // ── Blocking helpers (run inside spawn_blocking) ──────────────────────────────
 
-fn scan_repo_blocking(root: &str, max_size: u64, max_files: usize) -> Result<ScanResult, Error> {
+fn scan_repo_blocking(root: &Path, max_size: u64, max_files: usize) -> Result<ScanResult, Error> {
     let mut entries: Vec<FileEntry> = Vec::new();
     let mut total_found: usize = 0;
 
-    visit_dir(
-        Path::new(root),
-        max_size,
-        max_files,
-        &mut entries,
-        &mut total_found,
-    )?;
+    visit_dir(root, max_size, max_files, &mut entries, &mut total_found)?;
 
     let truncated = total_found > max_files;
     Ok(ScanResult {
@@ -320,58 +396,60 @@ fn visit_dir(
     Ok(())
 }
 
-fn read_file_blocking(path: &str, max_size: u64) -> Result<ReadResult, Error> {
+fn read_file_blocking(path: &Path, max_size: u64) -> Result<ReadResult, Error> {
+    let path_str = path.display().to_string();
     let meta = std::fs::metadata(path).map_err(|e| Error::InternalUnexpected {
-        reason: format!("cannot stat file '{path}': {e}"),
+        reason: format!("cannot stat file '{path_str}': {e}"),
     })?;
     if meta.len() > max_size {
         return Err(Error::InternalUnexpected {
             reason: format!(
-                "file '{path}' exceeds max_file_size_bytes ({} > {max_size})",
+                "file '{path_str}' exceeds max_file_size_bytes ({} > {max_size})",
                 meta.len()
             ),
         });
     }
     let bytes = std::fs::read(path).map_err(|e| Error::InternalUnexpected {
-        reason: format!("cannot read file '{path}': {e}"),
+        reason: format!("cannot read file '{path_str}': {e}"),
     })?;
 
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    let language = detect_language_from_path(path).map(title_case);
+    let language = detect_language_from_path(&path_str).map(title_case);
     let line_count = count_lines(&content);
 
     Ok(ReadResult {
-        path: path.to_owned(),
+        path: path_str,
         language,
         content,
         line_count,
     })
 }
 
-fn parse_file_blocking(path: &str, max_size: u64) -> Result<ParseResult, Error> {
+fn parse_file_blocking(path: &Path, max_size: u64) -> Result<ParseResult, Error> {
+    let path_str = path.display().to_string();
     let metadata = std::fs::metadata(path).map_err(|e| Error::InternalUnexpected {
-        reason: format!("cannot stat file '{path}': {e}"),
+        reason: format!("cannot stat file '{path_str}': {e}"),
     })?;
 
     if metadata.len() > max_size {
         return Err(Error::InternalUnexpected {
             reason: format!(
-                "file '{path}' exceeds max_file_size_bytes ({} > {max_size})",
+                "file '{path_str}' exceeds max_file_size_bytes ({} > {max_size})",
                 metadata.len()
             ),
         });
     }
 
     let bytes = std::fs::read(path).map_err(|e| Error::InternalUnexpected {
-        reason: format!("cannot read file '{path}': {e}"),
+        reason: format!("cannot read file '{path_str}': {e}"),
     })?;
 
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    let language_name = detect_language_from_path(path);
+    let language_name = detect_language_from_path(&path_str);
 
     let items = match language_name {
         None => {
-            tracing::debug!(path, "no language detected; skipping parse");
+            tracing::debug!(path = %path_str, "no language detected; skipping parse");
             serde_json::Value::Null
         }
         Some(lang) => {
@@ -379,11 +457,11 @@ fn parse_file_blocking(path: &str, max_size: u64) -> Result<ParseResult, Error> 
             match process(&content, &config) {
                 Ok(result) => {
                     serde_json::to_value(&result).map_err(|e| Error::InternalUnexpected {
-                        reason: format!("failed to serialize parse result for '{path}': {e}"),
+                        reason: format!("failed to serialize parse result for '{path_str}': {e}"),
                     })?
                 }
                 Err(e) => {
-                    tracing::warn!(path, language = lang, error = %e, "tree-sitter parse failed");
+                    tracing::warn!(path = %path_str, language = lang, error = %e, "tree-sitter parse failed");
                     serde_json::Value::Null
                 }
             }
@@ -392,7 +470,7 @@ fn parse_file_blocking(path: &str, max_size: u64) -> Result<ParseResult, Error> 
 
     let language = language_name.map(title_case);
     Ok(ParseResult {
-        path: path.to_owned(),
+        path: path_str,
         language,
         items,
     })
@@ -402,27 +480,34 @@ fn parse_file_blocking(path: &str, max_size: u64) -> Result<ParseResult, Error> 
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::config::CodeToolsConfig;
 
+    /// Construct `CodeTools` rooted at `CARGO_MANIFEST_DIR` so tests can
+    /// reference real source files in the trumpet repo via relative paths.
     fn default_tools() -> CodeTools {
-        CodeTools::new(CodeToolsConfig::default())
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        CodeTools::new(CodeToolsConfig {
+            workspace_root: Some(manifest),
+            ..CodeToolsConfig::default()
+        })
+        .expect("CodeTools::new must succeed for the manifest dir")
     }
 
-    // Path to the trumpet project source, resolved at test time.
+    /// Path to the trumpet project source directory, relative to the
+    /// workspace root.
     fn src_path() -> String {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        format!("{manifest}/src")
+        "src".to_owned()
     }
 
     fn lib_rs_path() -> String {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        format!("{manifest}/src/lib.rs")
+        "src/lib.rs".to_owned()
     }
 
     fn types_rs_path() -> String {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        format!("{manifest}/src/core/types.rs")
+        "src/core/types.rs".to_owned()
     }
 
     // ── scan_repo ──────────────────────────────────────────────────────────────
@@ -461,11 +546,13 @@ mod tests {
 
     #[tokio::test]
     async fn scan_repo_respects_max_files() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config = CodeToolsConfig {
             max_files_per_page: 2,
+            workspace_root: Some(manifest),
             ..CodeToolsConfig::default()
         };
-        let tools = CodeTools::new(config);
+        let tools = CodeTools::new(config).expect("CodeTools::new");
 
         let result = tools
             .scan_repo(&src_path())
@@ -578,5 +665,137 @@ mod tests {
         let input = serde_json::json!({});
         let result = tools.dispatch("code.read_file", input).await;
         assert!(result.is_err(), "missing path must return error");
+    }
+
+    // ── sandbox ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn new_rejects_missing_workspace_root() {
+        let err = CodeTools::new(CodeToolsConfig::default())
+            .expect_err("CodeTools::new must fail when workspace_root is None");
+        assert!(
+            matches!(err, Error::ConfigValidationFailed { .. }),
+            "expected ConfigValidationFailed, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn new_rejects_nonexistent_workspace_root() {
+        let err = CodeTools::new(CodeToolsConfig {
+            workspace_root: Some(PathBuf::from("/this/does/not/exist/anywhere")),
+            ..CodeToolsConfig::default()
+        })
+        .expect_err("CodeTools::new must fail for a missing directory");
+        assert!(
+            matches!(err, Error::ConfigValidationFailed { .. }),
+            "expected ConfigValidationFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_traversal_attack() {
+        let tools = default_tools();
+        // `..` to escape the workspace root by climbing above the manifest dir.
+        let result = tools.read_file("../../etc/passwd").await;
+        let err = result.expect_err("traversal attack must be rejected");
+        match err {
+            Error::ToolInvocationFailed { reason, .. } => {
+                assert!(
+                    reason.contains("outside the workspace sandbox")
+                        || reason.contains("could not be resolved"),
+                    "expected sandbox or resolution error, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolInvocationFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_absolute_path_outside_root() {
+        let tools = default_tools();
+        let result = tools.read_file("/etc/hostname").await;
+        // /etc/hostname may exist on macOS (rare) but is outside CARGO_MANIFEST_DIR;
+        // either way the call must fail (sandbox or unresolved).
+        let err = result.expect_err("absolute path outside root must be rejected");
+        assert!(
+            matches!(err, Error::ToolInvocationFailed { .. }),
+            "expected ToolInvocationFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_symlink_escape() {
+        use tempfile::TempDir;
+
+        let workspace = TempDir::new().expect("tempdir");
+        let outside = TempDir::new().expect("tempdir");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "classified").expect("write secret");
+
+        // Place a symlink inside the workspace pointing to the file outside.
+        let link = workspace.path().join("escape");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&secret, &link).expect("create symlink");
+        #[cfg(not(unix))]
+        return;
+
+        let tools = CodeTools::new(CodeToolsConfig {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            ..CodeToolsConfig::default()
+        })
+        .expect("CodeTools::new");
+
+        let err = tools
+            .read_file("escape")
+            .await
+            .expect_err("symlink escape must be rejected");
+        match err {
+            Error::ToolInvocationFailed { reason, .. } => {
+                assert!(
+                    reason.contains("outside the workspace sandbox"),
+                    "expected sandbox error after symlink resolution, got: {reason}"
+                );
+            }
+            other => panic!("expected ToolInvocationFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_file_accepts_valid_relative_path() {
+        let tools = default_tools();
+        let result = tools
+            .read_file("Cargo.toml")
+            .await
+            .expect("relative path inside workspace must succeed");
+        assert!(
+            !result.content.is_empty(),
+            "Cargo.toml content must be non-empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_repo_rejects_traversal() {
+        let tools = default_tools();
+        let err = tools
+            .scan_repo("../..")
+            .await
+            .expect_err("traversal in scan_repo must be rejected");
+        assert!(
+            matches!(err, Error::ToolInvocationFailed { .. }),
+            "expected ToolInvocationFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_file_rejects_traversal() {
+        let tools = default_tools();
+        let err = tools
+            .parse_file("../../etc/passwd")
+            .await
+            .expect_err("traversal in parse_file must be rejected");
+        assert!(
+            matches!(err, Error::ToolInvocationFailed { .. }),
+            "expected ToolInvocationFailed, got: {err:?}"
+        );
     }
 }

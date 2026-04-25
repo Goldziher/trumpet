@@ -121,15 +121,19 @@ mod tests {
     use crate::core::tools::ToolRegistry;
 
     fn lib_rs_path() -> String {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        format!("{manifest}/src/lib.rs")
+        "src/lib.rs".to_owned()
     }
 
     fn make_invoker() -> ToolInvoker {
         let bus = Arc::new(MessageBus::new(64));
         let tools = Arc::new(RwLock::new(ToolRegistry::new(Arc::clone(&bus))));
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let code_tools = Arc::new(RwLock::new(Some(
-            CodeTools::new(CodeToolsConfig::default()),
+            CodeTools::new(CodeToolsConfig {
+                workspace_root: Some(manifest),
+                ..CodeToolsConfig::default()
+            })
+            .expect("CodeTools::new must succeed for the manifest dir"),
         )));
         let tasks = Arc::new(RwLock::new(crate::core::TaskManager::new(Arc::clone(&bus))));
         let registry = Arc::new(RwLock::new(AgentRegistry::new(Arc::clone(&bus))));
