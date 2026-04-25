@@ -193,6 +193,15 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
         None
     };
 
+    // ── Agent + task watchdog ────────────────────────────────────────────────
+    let watchdog_handle = crate::core::watchdog::spawn(
+        Arc::clone(&state.registry),
+        Arc::clone(&state.tasks),
+        std::time::Duration::from_secs(config.agents.heartbeat_interval_secs),
+        std::time::Duration::from_secs(config.agents.timeout_secs),
+        cancel.clone(),
+    );
+
     // ── Push notification delivery worker ────────────────────────────────────
     let webhook_client = reqwest::Client::builder().build().map_err(|e| {
         crate::error::Error::InternalUnexpected {
@@ -246,10 +255,11 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
         Err(_) => tracing::warn!("gRPC server did not drain within 30s; forcing shutdown"),
     }
 
-    // Internal workers (snapshot timer, push delivery) hold no
+    // Internal workers (snapshot timer, push delivery, watchdog) hold no
     // client-visible state so a hard abort is acceptable.
     snapshot_handle.abort();
     push_handle.abort();
+    watchdog_handle.abort();
     if let Some(handle) = mcp_handle {
         handle.abort();
     }

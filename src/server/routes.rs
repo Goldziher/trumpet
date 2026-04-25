@@ -117,6 +117,23 @@ async fn deregister_agent(
     Ok(Json(info))
 }
 
+/// POST /agents/{id}/heartbeat — bump the agent's `last_heartbeat_at`.
+///
+/// Idempotent. Used by agents to signal liveness; the watchdog (in
+/// `core::watchdog`) flips agents that have not heartbeat within the
+/// configured timeout to [`AgentStatus::Disconnected`](crate::core::types::AgentStatus).
+async fn heartbeat_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<AgentInfo>> {
+    let agent_id = id
+        .parse::<AgentId>()
+        .map_err(|_| Error::AgentNotFound { name: id.clone() })?;
+    let mut registry = state.registry.write().await;
+    let info = registry.heartbeat(&agent_id)?;
+    Ok(Json(info))
+}
+
 /// GET /agents — list all registered agents.
 async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
     let registry = state.registry.read().await;
@@ -379,6 +396,7 @@ pub fn router(state: AppState) -> Router {
         .route("/agents", get(list_agents))
         .route("/agents/register", post(register_agent))
         .route("/agents/deregister", post(deregister_agent))
+        .route("/agents/{id}/heartbeat", post(heartbeat_agent))
         .route(
             "/conversations",
             post(create_conversation).get(list_conversations),
@@ -433,6 +451,7 @@ mod tests {
             id: AgentId::new(),
             name: "test".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };
@@ -499,6 +518,7 @@ mod tests {
             id: AgentId::new(),
             name: "test".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };

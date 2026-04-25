@@ -22,6 +22,7 @@ fn agent_info_constructs_and_serializes() {
         id: AgentId::new(),
         name: "integration-test-agent".to_owned(),
         registered_at: Utc::now(),
+        last_heartbeat_at: Utc::now(),
         status: AgentStatus::Connected,
         capabilities: None,
     };

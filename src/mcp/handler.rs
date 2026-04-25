@@ -34,6 +34,13 @@ pub struct DeregisterAgentArgs {
     pub agent_id: String,
 }
 
+/// Arguments for the `heartbeat_agent` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct HeartbeatAgentArgs {
+    /// UUID string of the agent.
+    pub agent_id: String,
+}
+
 /// Arguments for the `create_conversation` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CreateConversationArgs {
@@ -142,6 +149,29 @@ impl TrumpetMcpServer {
             let mut registry = self.state.registry.write().await;
             registry
                 .register(&args.name, args.capabilities)
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?
+        };
+        let json = serde_json::to_string(&info)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Bump an agent's `last_heartbeat_at` to now.
+    #[tool(
+        description = "Bump an agent's last_heartbeat_at to now and return the updated AgentInfo. Used by agents to signal liveness; agents that miss the configured heartbeat window are flipped to Disconnected by the watchdog."
+    )]
+    async fn heartbeat_agent(
+        &self,
+        Parameters(args): Parameters<HeartbeatAgentArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let agent_id = args
+            .agent_id
+            .parse::<crate::core::types::AgentId>()
+            .map_err(|e| McpError::invalid_params(format!("invalid agent_id: {e}"), None))?;
+        let info = {
+            let mut registry = self.state.registry.write().await;
+            registry
+                .heartbeat(&agent_id)
                 .map_err(|e| McpError::invalid_params(e.to_string(), None))?
         };
         let json = serde_json::to_string(&info)

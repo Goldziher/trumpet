@@ -53,6 +53,39 @@ impl TaskFacade {
         assignee: Option<AgentId>,
         metadata: Option<serde_json::Value>,
     ) -> Result<Task, Error> {
+        self.submit_task_with_deadline(message, context_id, assignee, metadata, None)
+            .await
+    }
+
+    /// Same as [`Self::submit_task`] but accepts an explicit `deadline`.
+    pub async fn submit_task_with_deadline(
+        &self,
+        message: TaskMessage,
+        context_id: Option<ContextId>,
+        assignee: Option<AgentId>,
+        metadata: Option<serde_json::Value>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Task, Error> {
+        // If the caller pinned an explicit assignee, reject early when that
+        // agent is currently disconnected. Silently re-routing a pinned
+        // assignment would surprise callers who picked a specific agent.
+        if let Some(id) = assignee {
+            let reg = self.registry.read().await;
+            match reg.get(&id) {
+                None => {
+                    return Err(Error::AgentNotFound {
+                        name: id.to_string(),
+                    });
+                }
+                Some(info) if info.status != crate::core::types::AgentStatus::Connected => {
+                    return Err(Error::AgentDisconnected {
+                        name: info.name.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
         // Resolve assignee before creating the task.
         let resolved_assignee = if assignee.is_some() {
             assignee
@@ -71,6 +104,7 @@ impl TaskFacade {
                 metadata: metadata.clone(),
                 assignee: None,
                 creator: None,
+                deadline,
             };
             let registry = self.registry.read().await;
             let agents = registry.list();
@@ -78,8 +112,24 @@ impl TaskFacade {
         };
 
         let mut mgr = self.tasks.write().await;
-        let task = mgr.create_task(message, context_id, resolved_assignee, None, metadata)?;
+        let task = mgr.create_task_with_deadline(
+            message,
+            context_id,
+            resolved_assignee,
+            None,
+            metadata,
+            deadline,
+        )?;
         Ok(task)
+    }
+
+    /// Bump an agent's `last_heartbeat_at` and return the updated info.
+    pub async fn heartbeat(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<crate::core::types::AgentInfo, Error> {
+        let mut reg = self.registry.write().await;
+        reg.heartbeat(agent_id)
     }
 
     /// Transition a task to a new state.

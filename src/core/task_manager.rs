@@ -89,6 +89,23 @@ impl TaskManager {
         creator: Option<AgentId>,
         metadata: Option<serde_json::Value>,
     ) -> Result<Task, Error> {
+        self.create_task_with_deadline(message, context_id, assignee, creator, metadata, None)
+    }
+
+    /// Same as [`Self::create_task`] but accepts an explicit `deadline`.
+    ///
+    /// The watchdog (in `core::watchdog`) periodically scans non-terminal
+    /// tasks and transitions any whose `deadline` has passed to
+    /// [`TaskState::Failed`].
+    pub fn create_task_with_deadline(
+        &mut self,
+        message: TaskMessage,
+        context_id: Option<ContextId>,
+        assignee: Option<AgentId>,
+        creator: Option<AgentId>,
+        metadata: Option<serde_json::Value>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Task, Error> {
         let id = TaskId::new();
         let context_id = context_id.unwrap_or_default();
         let now = Utc::now();
@@ -106,6 +123,7 @@ impl TaskManager {
             assignee,
             creator,
             metadata,
+            deadline,
         };
 
         self.context_index.entry(context_id).or_default().push(id);

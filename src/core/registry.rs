@@ -96,10 +96,12 @@ impl AgentRegistry {
             });
         }
 
+        let now = Utc::now();
         let info = AgentInfo {
             id: AgentId::new(),
             name: name.to_owned(),
-            registered_at: Utc::now(),
+            registered_at: now,
+            last_heartbeat_at: now,
             status: AgentStatus::Connected,
             capabilities,
         };
@@ -109,6 +111,53 @@ impl AgentRegistry {
         self.bus.publish(Event::AgentRegistered(info.clone()));
 
         Ok(info)
+    }
+
+    /// Bump the agent's `last_heartbeat_at` to now and ensure it is
+    /// [`AgentStatus::Connected`].
+    ///
+    /// If the agent had been previously flipped to `Disconnected` by the
+    /// watchdog, an [`Event::AgentReconnected`] is fired. A live heartbeat
+    /// while already `Connected` is silent — the only side-effect is the
+    /// timestamp bump.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::AgentNotFound`] — no agent with `id` is registered.
+    pub fn heartbeat(&mut self, id: &AgentId) -> Result<AgentInfo, Error> {
+        let info = self
+            .agents
+            .get_mut(id)
+            .ok_or_else(|| Error::AgentNotFound {
+                name: id.to_string(),
+            })?;
+        info.last_heartbeat_at = Utc::now();
+        let was_disconnected = info.status == AgentStatus::Disconnected;
+        if was_disconnected {
+            info.status = AgentStatus::Connected;
+        }
+        let snapshot = info.clone();
+        if was_disconnected {
+            self.bus.publish(Event::AgentReconnected(snapshot.clone()));
+        }
+        Ok(snapshot)
+    }
+
+    /// Flip the agent to [`AgentStatus::Disconnected`] and emit
+    /// [`Event::AgentDisconnected`].
+    ///
+    /// Idempotent: returns `None` if the agent is already disconnected, the
+    /// `AgentInfo` snapshot otherwise. Used by the watchdog when an agent
+    /// fails to heartbeat within `agents.timeout_secs`.
+    pub fn mark_disconnected(&mut self, id: &AgentId) -> Option<AgentInfo> {
+        let info = self.agents.get_mut(id)?;
+        if info.status == AgentStatus::Disconnected {
+            return None;
+        }
+        info.status = AgentStatus::Disconnected;
+        let snapshot = info.clone();
+        self.bus.publish(Event::AgentDisconnected(snapshot.clone()));
+        Some(snapshot)
     }
 
     /// Remove the agent identified by `id` from the registry.
@@ -371,6 +420,7 @@ mod tests {
                 id: id1,
                 name: "alpha".to_owned(),
                 registered_at: Utc::now(),
+                last_heartbeat_at: Utc::now(),
                 status: AgentStatus::Connected,
                 capabilities: None,
             },
@@ -378,6 +428,7 @@ mod tests {
                 id: id2,
                 name: "beta".to_owned(),
                 registered_at: Utc::now(),
+                last_heartbeat_at: Utc::now(),
                 status: AgentStatus::Disconnected,
                 capabilities: None,
             },
@@ -408,6 +459,7 @@ mod tests {
             id: AgentId::new(),
             name: "new-agent".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };

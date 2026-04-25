@@ -365,6 +365,10 @@ pub struct Task {
     pub assignee: Option<AgentId>,
     /// The agent (or system) that created this task.
     pub creator: Option<AgentId>,
+    /// When set, the task watchdog will fail the task if it is still in a
+    /// non-terminal state past this instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +630,7 @@ mod tests {
             metadata: Some(serde_json::json!({"priority": 1})),
             assignee: Some(AgentId::new()),
             creator: Some(AgentId::new()),
+            deadline: None,
         };
 
         let json = serde_json::to_string(&task).expect("serialization must succeed");

@@ -44,6 +44,7 @@ mod tests {
             id: AgentId::new(),
             name: name.to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         }

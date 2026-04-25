@@ -151,6 +151,12 @@ pub struct AgentInfo {
     pub name: String,
     /// Wall-clock time at which the agent first registered.
     pub registered_at: DateTime<Utc>,
+    /// Wall-clock time of the most recent heartbeat (or registration, when
+    /// no heartbeat has yet been observed). Used by the connection watchdog
+    /// to detect dead agents and flip them to [`AgentStatus::Disconnected`]
+    /// after `agents.timeout_secs` of silence.
+    #[serde(default = "Utc::now")]
+    pub last_heartbeat_at: DateTime<Utc>,
     /// Current connectivity status.
     pub status: AgentStatus,
     /// Optional capabilities advertised by this agent (ADR-015).
@@ -283,6 +289,7 @@ mod tests {
             id: AgentId::new(),
             name: "claude-code-1".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };

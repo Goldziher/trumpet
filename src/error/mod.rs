@@ -51,6 +51,11 @@ pub enum Error {
     #[error("agent '{name}' not found")]
     AgentNotFound { name: String },
 
+    /// The agent exists but has been flipped to `Disconnected` and cannot
+    /// accept new work.
+    #[error("agent '{name}' is disconnected")]
+    AgentDisconnected { name: String },
+
     /// An agent with this name is already registered.
     #[error("agent '{name}' is already registered")]
     AgentAlreadyRegistered { name: String },
@@ -170,6 +175,7 @@ impl ErrorCode for Error {
             Self::ConnectionTimeout { .. } => "CONNECTION_TIMEOUT",
             Self::ConnectionSocketNotFound { .. } => "CONNECTION_SOCKET_NOT_FOUND",
             Self::AgentNotFound { .. } => "AGENT_NOT_FOUND",
+            Self::AgentDisconnected { .. } => "AGENT_DISCONNECTED",
             Self::AgentAlreadyRegistered { .. } => "AGENT_ALREADY_REGISTERED",
             Self::AgentInvalidName { .. } => "AGENT_INVALID_NAME",
             Self::ConversationNotFound { .. } => "CONVERSATION_NOT_FOUND",
@@ -201,6 +207,7 @@ impl ErrorCode for Error {
         match self {
             Self::DaemonNotRunning
             | Self::DaemonShutdownFailed { .. }
+            | Self::AgentDisconnected { .. }
             | Self::ToolProviderUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::DaemonAlreadyRunning { .. }
             | Self::AgentAlreadyRegistered { .. }
@@ -262,6 +269,11 @@ impl ErrorCode for Error {
             Self::AgentNotFound { name } => {
                 format!(
                     "list registered agents with `trumpet agent list`; '{name}' was not found"
+                )
+            }
+            Self::AgentDisconnected { name } => {
+                format!(
+                    "agent '{name}' has missed its heartbeat window; have it call `POST /agents/{{id}}/heartbeat` or re-register"
                 )
             }
             Self::AgentAlreadyRegistered { name } => {

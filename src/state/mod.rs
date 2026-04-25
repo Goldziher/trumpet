@@ -158,6 +158,7 @@ mod tests {
             id: AgentId::new(),
             name: "test-agent".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };
@@ -179,6 +180,7 @@ mod tests {
             id: agent_id,
             name: "rich-agent".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };
@@ -261,6 +263,7 @@ mod tests {
                 id: AgentId::new(),
                 name: "second".to_owned(),
                 registered_at: Utc::now(),
+                last_heartbeat_at: Utc::now(),
                 status: AgentStatus::Disconnected,
                 capabilities: None,
             }],

@@ -16,6 +16,7 @@ pub mod task_types;
 pub mod tool_invoker;
 pub mod tools;
 pub mod types;
+pub mod watchdog;
 
 pub use bus::{Event, MessageBus};
 pub use chat::ChatManager;

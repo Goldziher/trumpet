@@ -17,6 +17,12 @@ pub enum Event {
     AgentRegistered(AgentInfo),
     /// An agent has been removed from the registry.
     AgentDeregistered(AgentId),
+    /// An agent failed to heartbeat within the timeout window and has been
+    /// flipped to [`AgentStatus::Disconnected`](crate::core::types::AgentStatus).
+    AgentDisconnected(AgentInfo),
+    /// A previously disconnected agent resumed heartbeating and is now
+    /// [`AgentStatus::Connected`](crate::core::types::AgentStatus) again.
+    AgentReconnected(AgentInfo),
     /// A new message has been posted to a conversation.
     NewMessage(ChatMessage),
     /// A new tool has been registered.
@@ -44,6 +50,8 @@ impl Event {
         match self {
             Self::AgentRegistered(_) => "agent_registered",
             Self::AgentDeregistered(_) => "agent_deregistered",
+            Self::AgentDisconnected(_) => "agent_disconnected",
+            Self::AgentReconnected(_) => "agent_reconnected",
             Self::NewMessage(_) => "new_message",
             Self::ToolRegistered(_) => "tool_registered",
             Self::ToolDeregistered(_) => "tool_deregistered",
@@ -112,6 +120,7 @@ mod tests {
             id: AgentId::new(),
             name: "test-agent".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         }

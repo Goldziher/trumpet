@@ -92,6 +92,7 @@ mod tests {
             id,
             name: "test-agent".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status,
             capabilities: None,
         }
@@ -172,6 +173,7 @@ mod tests {
             id,
             name: "tagged-agent".to_owned(),
             registered_at: Utc::now(),
+            last_heartbeat_at: Utc::now(),
             status,
             capabilities: Some(AgentCapabilities {
                 supported_input_modes: vec![],

@@ -458,6 +458,7 @@ mod tests {
             metadata: None,
             assignee: None,
             creator: None,
+            deadline: None,
         };
         let proto_task = core_task_to_proto(&task);
         assert_eq!(proto_task.id, task.id.to_string());
@@ -480,6 +481,7 @@ mod tests {
             metadata: None,
             assignee: None,
             creator: None,
+            deadline: None,
         }
     }
 
@@ -545,6 +547,7 @@ mod tests {
             id: AgentId::new(),
             name: "x".to_owned(),
             registered_at: chrono::Utc::now(),
+            last_heartbeat_at: chrono::Utc::now(),
             status: AgentStatus::Connected,
             capabilities: None,
         };
