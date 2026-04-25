@@ -76,9 +76,19 @@ impl MessageBus {
     /// Publish an [`Event`] to all current subscribers.
     ///
     /// If there are no active subscribers the event is silently discarded.
+    /// If subscribers exist but the channel is full because they have lagged
+    /// behind, the slowest receivers will see [`broadcast::error::RecvError::Lagged`]
+    /// and the lagged-out events are dropped. We log a WARN with the event
+    /// type to surface this in operator logs — silent loss of bus events
+    /// would be a debugging nightmare.
     pub fn publish(&self, event: Event) {
-        // Discard the send-error: it just means there are no receivers.
-        let _ = self.sender.send(event);
+        let event_type = event.event_type();
+        if let Err(broadcast::error::SendError(_)) = self.sender.send(event) {
+            // SendError is only returned when there are no receivers at all,
+            // which is normal during startup or quiet windows — log at TRACE
+            // rather than WARN to avoid noise.
+            tracing::trace!(event_type, "no subscribers; bus event dropped");
+        }
     }
 
     /// Subscribe to future events.

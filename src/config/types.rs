@@ -225,6 +225,22 @@ pub struct CodeToolsConfig {
     /// programmatically must set this explicitly or accept the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
+    /// Directory names to skip when walking a workspace tree. Matched
+    /// case-sensitively against the directory's file name. Hidden directories
+    /// (names starting with `.`) are always skipped in addition.
+    #[serde(default = "default_walk_skip_dirs")]
+    pub walk_skip_dirs: Vec<String>,
+}
+
+/// Default deny list for [`CodeToolsConfig::walk_skip_dirs`].
+fn default_walk_skip_dirs() -> Vec<String> {
+    vec![
+        "target".to_owned(),
+        "node_modules".to_owned(),
+        "vendor".to_owned(),
+        "dist".to_owned(),
+        "build".to_owned(),
+    ]
 }
 
 impl Default for CodeToolsConfig {
@@ -234,6 +250,7 @@ impl Default for CodeToolsConfig {
             max_files_per_page: 500,
             max_search_matches: 1000,
             workspace_root: None,
+            walk_skip_dirs: default_walk_skip_dirs(),
         }
     }
 }

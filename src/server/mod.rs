@@ -149,8 +149,9 @@ pub async fn serve(config: &Config) -> Result<()> {
                 }))
             }
             McpTransport::Http => {
-                tracing::warn!("MCP HTTP transport not yet implemented; skipping MCP server");
-                None
+                return Err(crate::error::Error::ConfigValidationFailed {
+                    reason: "mcp.transport = \"http\" is configured but the HTTP transport is not yet implemented; use \"stdio\" or set mcp.enabled = false".to_owned(),
+                });
             }
         }
     } else {

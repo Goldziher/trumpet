@@ -324,8 +324,16 @@ impl TaskManager {
         if let Some(evt) = bus_event {
             self.bus.publish(evt);
         }
-        // Task-scoped channel.
-        let _ = self.event_tx.send(event);
+        // Task-scoped channel. SendError on a tokio broadcast means no
+        // receivers — log at TRACE to avoid noise during startup.
+        if let Err(tokio::sync::broadcast::error::SendError(dropped)) = self.event_tx.send(event) {
+            let event_type = match &dropped {
+                TaskEvent::TaskCreated(_) => "task_created",
+                TaskEvent::TaskStatusChanged { .. } => "task_status_changed",
+                TaskEvent::TaskArtifactAdded { .. } => "task_artifact_added",
+            };
+            tracing::trace!(event_type, "no task-event subscribers; event dropped");
+        }
     }
 }
 

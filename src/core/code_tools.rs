@@ -205,12 +205,15 @@ impl CodeTools {
         let resolved = self.resolve_safe_path("code.scan_repo", path)?;
         let max_size = self.config.max_file_size_bytes;
         let max_files = self.config.max_files_per_page as usize;
+        let skip_dirs = self.config.walk_skip_dirs.clone();
 
-        tokio::task::spawn_blocking(move || scan_repo_blocking(&resolved, max_size, max_files))
-            .await
-            .map_err(|e| Error::InternalUnexpected {
-                reason: format!("scan_repo task panicked: {e}"),
-            })?
+        tokio::task::spawn_blocking(move || {
+            scan_repo_blocking(&resolved, max_size, max_files, &skip_dirs)
+        })
+        .await
+        .map_err(|e| Error::InternalUnexpected {
+            reason: format!("scan_repo task panicked: {e}"),
+        })?
     }
 
     /// Read `path` and return its content along with detected language metadata.
@@ -303,11 +306,23 @@ impl CodeTools {
 
 // ── Blocking helpers (run inside spawn_blocking) ──────────────────────────────
 
-fn scan_repo_blocking(root: &Path, max_size: u64, max_files: usize) -> Result<ScanResult, Error> {
+fn scan_repo_blocking(
+    root: &Path,
+    max_size: u64,
+    max_files: usize,
+    skip_dirs: &[String],
+) -> Result<ScanResult, Error> {
     let mut entries: Vec<FileEntry> = Vec::new();
     let mut total_found: usize = 0;
 
-    visit_dir(root, max_size, max_files, &mut entries, &mut total_found)?;
+    visit_dir(
+        root,
+        max_size,
+        max_files,
+        skip_dirs,
+        &mut entries,
+        &mut total_found,
+    )?;
 
     let truncated = total_found > max_files;
     Ok(ScanResult {
@@ -322,6 +337,7 @@ fn visit_dir(
     dir: &Path,
     max_size: u64,
     max_files: usize,
+    skip_dirs: &[String],
     out: &mut Vec<FileEntry>,
     total: &mut usize,
 ) -> Result<(), Error> {
@@ -346,7 +362,23 @@ fn visit_dir(
         }
 
         if sym_meta.is_dir() {
-            visit_dir(&entry_path, max_size, max_files, out, total)?;
+            // Skip hidden directories (.git, .vscode, …) and configured deny
+            // list (target, node_modules, …). Without this, a default scan
+            // of any non-trivial repo enumerates millions of dependency
+            // files and is effectively unusable.
+            let dir_name = entry_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if dir_name.starts_with('.') {
+                tracing::trace!(path = %entry_path.display(), "skipping hidden directory");
+                continue;
+            }
+            if skip_dirs.iter().any(|d| d == dir_name) {
+                tracing::trace!(path = %entry_path.display(), "skipping deny-listed directory");
+                continue;
+            }
+            visit_dir(&entry_path, max_size, max_files, skip_dirs, out, total)?;
             continue;
         }
 
@@ -354,34 +386,48 @@ fn visit_dir(
             continue;
         }
 
-        let metadata = sym_meta;
-
-        let size_bytes = metadata.len();
+        let size_bytes = sym_meta.len();
         if size_bytes > max_size {
             tracing::debug!(path = %entry_path.display(), size_bytes, "skipping oversized file");
             continue;
         }
 
-        // Binary detection: read probe bytes.
-        let content_bytes = match std::fs::read(&entry_path) {
-            Ok(b) => b,
+        // Read just the binary-detection probe (first 512 bytes) without
+        // loading the whole file into memory.
+        let mut file = match std::fs::File::open(&entry_path) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::debug!(path = %entry_path.display(), error = %e, "skipping unreadable file");
+                continue;
+            }
+        };
+        let mut probe = [0u8; 512];
+        let probe_len = match std::io::Read::read(&mut file, &mut probe) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::debug!(path = %entry_path.display(), error = %e, "skipping unreadable file");
+                continue;
+            }
+        };
+        if is_binary(&probe[..probe_len]) {
+            tracing::debug!(path = %entry_path.display(), "skipping binary file");
+            continue;
+        }
+
+        // Stream-count newlines through a buffered reader rather than
+        // re-reading the entire file into memory.
+        let line_count = match count_lines_streaming(&entry_path) {
+            Ok(c) => c,
             Err(e) => {
                 tracing::debug!(path = %entry_path.display(), error = %e, "skipping unreadable file");
                 continue;
             }
         };
 
-        if is_binary(&content_bytes) {
-            tracing::debug!(path = %entry_path.display(), "skipping binary file");
-            continue;
-        }
-
         *total += 1;
 
         let path_str = entry_path.to_string_lossy().into_owned();
         let language = detect_language_from_path(&path_str).map(title_case);
-        let content_str = String::from_utf8_lossy(&content_bytes);
-        let line_count = count_lines(&content_str);
 
         if out.len() < max_files {
             out.push(FileEntry {
@@ -394,6 +440,39 @@ fn visit_dir(
     }
 
     Ok(())
+}
+
+/// Count newline-delimited lines in `path` using a buffered reader so the
+/// full content never needs to live in memory.
+///
+/// Matches the trailing-newline semantics of [`count_lines`]: a non-empty
+/// file with no trailing `\n` still counts as having a final line.
+fn count_lines_streaming(path: &Path) -> std::io::Result<usize> {
+    use std::io::{BufReader, Read as _};
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = BufReader::with_capacity(8 * 1024, file);
+    let mut buf = [0u8; 8 * 1024];
+    let mut newlines: usize = 0;
+    let mut last_byte: Option<u8> = None;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        for &b in &buf[..n] {
+            if b == b'\n' {
+                newlines += 1;
+            }
+        }
+        last_byte = Some(buf[n - 1]);
+    }
+    let lines = match last_byte {
+        None => 0,               // empty file
+        Some(b'\n') => newlines, // trailing newline
+        Some(_) => newlines + 1, // final unterminated line
+    };
+    Ok(lines)
 }
 
 fn read_file_blocking(path: &Path, max_size: u64) -> Result<ReadResult, Error> {
@@ -783,6 +862,75 @@ mod tests {
         assert!(
             matches!(err, Error::ToolInvocationFailed { .. }),
             "expected ToolInvocationFailed, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn count_lines_streaming_matches_count_lines_for_typical_file() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let cases = [
+            ("", 0usize),
+            ("hello", 1),
+            ("hello\n", 1),
+            ("a\nb\nc\n", 3),
+            ("a\nb\nc", 3),
+        ];
+        for (content, expected) in cases {
+            let path = dir.path().join("f.txt");
+            std::fs::write(&path, content).unwrap();
+            let stream_count = count_lines_streaming(&path).unwrap();
+            assert_eq!(
+                stream_count, expected,
+                "streaming count must match expected for {content:?}"
+            );
+            assert_eq!(
+                stream_count,
+                count_lines(content),
+                "streaming and in-memory counts must agree for {content:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_repo_skips_hidden_and_deny_listed_dirs() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        // Visible source file at root.
+        std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+        // Hidden directory with a file that should be skipped.
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: foo").unwrap();
+        // Deny-listed directory.
+        std::fs::create_dir(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join("target/x.rs"), "fn x() {}").unwrap();
+        // Plain dir that must be visited.
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        std::fs::write(dir.path().join("nested/lib.rs"), "fn lib() {}").unwrap();
+
+        let tools = CodeTools::new(CodeToolsConfig {
+            workspace_root: Some(dir.path().to_path_buf()),
+            ..CodeToolsConfig::default()
+        })
+        .expect("CodeTools::new");
+
+        let result = tools.scan_repo(".").await.expect("scan must succeed");
+        let paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.iter().any(|p| p.ends_with("main.rs")),
+            "must include main.rs, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.ends_with("nested/lib.rs")),
+            "must include nested/lib.rs, got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("/.git/")),
+            "must skip .git/, got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("/target/")),
+            "must skip target/, got: {paths:?}"
         );
     }
 

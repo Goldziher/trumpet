@@ -277,14 +277,32 @@ fn json_to_prost_value(val: serde_json::Value) -> prost_types::Value {
         serde_json::Value::Null => Kind::NullValue(0),
         serde_json::Value::Bool(b) => Kind::BoolValue(b),
         serde_json::Value::Number(n) => {
-            // as_f64() returns None for integers outside f64 representable range.
-            // Fall back to i64 → f64 cast (lossy for very large values).
-            let f = n
+            // serde_json guarantees one of as_f64/as_i64/as_u64 succeeds, but
+            // we cascade for integers outside the f64-representable range.
+            // The final `unwrap_or` branch should be unreachable; if a JSON
+            // Number ever survives all three, log loudly and emit Null so the
+            // caller sees a clear marker rather than a silent zero.
+            let opt = n
                 .as_f64()
                 .or_else(|| n.as_i64().map(|i| i as f64))
-                .or_else(|| n.as_u64().map(|u| u as f64))
-                .unwrap_or(0.0);
-            Kind::NumberValue(f)
+                .or_else(|| n.as_u64().map(|u| u as f64));
+            match opt {
+                Some(f) if f.is_finite() => Kind::NumberValue(f),
+                Some(f) => {
+                    tracing::warn!(
+                        value = ?f,
+                        "non-finite JSON number converted to Null for proto Struct"
+                    );
+                    Kind::NullValue(0)
+                }
+                None => {
+                    tracing::warn!(
+                        number = ?n,
+                        "JSON number is neither f64 nor i64 nor u64; emitting Null"
+                    );
+                    Kind::NullValue(0)
+                }
+            }
         }
         serde_json::Value::String(s) => Kind::StringValue(s),
         serde_json::Value::Array(arr) => Kind::ListValue(prost_types::ListValue {
