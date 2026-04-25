@@ -1,19 +1,22 @@
 //! Axum route handlers for the Trumpet HTTP API.
 
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::core::task_types::{MessageRole, Part, TaskMessage};
 use crate::core::types::{
-    AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, SkillInfo,
+    AgentId, AgentInfo, ChatMessage, Conversation, ConversationId, MessageId, SkillInfo,
 };
+use crate::core::{ContextId, DefaultTaskRouter, Task, TaskFacade, TaskFilter, TaskId, TaskState};
 use crate::error::{Error, Result};
 
 use super::state::AppState;
@@ -62,6 +65,22 @@ pub(crate) struct InvokeSkillRequest {
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: &'static str,
+}
+
+/// Request body for submitting a new task.
+#[derive(Debug, Deserialize)]
+pub struct SubmitTaskRequest {
+    pub message: String,
+    pub context_id: Option<String>,
+    pub assignee: Option<String>,
+}
+
+/// Query parameters for listing tasks.
+#[derive(Debug, Deserialize)]
+pub struct ListTasksQuery {
+    pub context_id: Option<String>,
+    pub state: Option<String>,
+    pub assignee: Option<String>,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -191,6 +210,124 @@ async fn invoke_skill(
     Err(Error::SkillNotImplemented { name })
 }
 
+// ── Task helpers ─────────────────────────────────────────────────────────────
+
+fn make_facade(state: &AppState) -> TaskFacade {
+    TaskFacade::new(
+        Arc::clone(&state.tasks),
+        Arc::clone(&state.registry),
+        Box::new(DefaultTaskRouter),
+    )
+}
+
+/// POST /tasks — submit a new task.
+async fn submit_task(
+    State(state): State<AppState>,
+    Json(req): Json<SubmitTaskRequest>,
+) -> Result<Json<Task>> {
+    let context_id = req
+        .context_id
+        .as_deref()
+        .map(|s| {
+            s.parse::<ContextId>()
+                .map_err(|_| Error::TaskNotFound { id: s.to_owned() })
+        })
+        .transpose()?;
+
+    let assignee = req
+        .assignee
+        .as_deref()
+        .map(|s| {
+            s.parse::<AgentId>()
+                .map_err(|_| Error::AgentNotFound { name: s.to_owned() })
+        })
+        .transpose()?;
+
+    let message = TaskMessage {
+        id: MessageId::new(),
+        role: MessageRole::User,
+        parts: vec![Part::Text { text: req.message }],
+        metadata: None,
+    };
+
+    let facade = make_facade(&state);
+    let task = facade
+        .submit_task(message, context_id, assignee, None)
+        .await?;
+    Ok(Json(task))
+}
+
+/// GET /tasks/{id} — get a task by ID.
+async fn get_task_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Task>> {
+    let task_id = id
+        .parse::<TaskId>()
+        .map_err(|_| Error::TaskNotFound { id: id.clone() })?;
+    let facade = make_facade(&state);
+    let task = facade.get_task(&task_id).await?;
+    Ok(Json(task))
+}
+
+/// GET /tasks — list tasks with optional filters.
+async fn list_tasks_handler(
+    State(state): State<AppState>,
+    Query(query): Query<ListTasksQuery>,
+) -> Result<Json<Vec<Task>>> {
+    let context_id = query
+        .context_id
+        .as_deref()
+        .map(|s| {
+            s.parse::<ContextId>()
+                .map_err(|_| Error::TaskNotFound { id: s.to_owned() })
+        })
+        .transpose()?;
+
+    let state_filter = query
+        .state
+        .as_deref()
+        .map(|s| {
+            serde_json::from_str::<TaskState>(&format!("\"{s}\"")).map_err(|_| {
+                Error::ConfigValidationFailed {
+                    reason: format!("'{s}' is not a valid task state"),
+                }
+            })
+        })
+        .transpose()?;
+
+    let assignee = query
+        .assignee
+        .as_deref()
+        .map(|s| {
+            s.parse::<AgentId>()
+                .map_err(|_| Error::AgentNotFound { name: s.to_owned() })
+        })
+        .transpose()?;
+
+    let filter = TaskFilter {
+        context_id,
+        state: state_filter,
+        assignee,
+    };
+    let facade = make_facade(&state);
+    let tasks = facade.list_tasks(&filter).await;
+    Ok(Json(tasks))
+}
+
+/// POST /tasks/{id}/cancel — cancel a task.
+async fn cancel_task_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Task>> {
+    let task_id = id
+        .parse::<TaskId>()
+        .map_err(|_| Error::TaskNotFound { id: id.clone() })?;
+    let facade = make_facade(&state);
+    let task = facade.cancel_task(&task_id, None).await?;
+    Ok(Json(task))
+}
+
 /// GET /events — SSE stream of domain events.
 ///
 /// Serializes each [`Event`] variant into a typed SSE event. Lagged
@@ -238,6 +375,9 @@ pub fn router(state: AppState) -> Router {
         .route("/skills", get(list_skills))
         .route("/skills/{name}", get(get_skill_by_name))
         .route("/skills/{name}/invoke", post(invoke_skill))
+        .route("/tasks", post(submit_task).get(list_tasks_handler))
+        .route("/tasks/{id}", get(get_task_by_id))
+        .route("/tasks/{id}/cancel", post(cancel_task_handler))
         .route("/events", get(events))
         .route("/ws", get(ws::ws_handler))
         .with_state(state)

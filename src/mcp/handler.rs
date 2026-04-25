@@ -53,6 +53,44 @@ pub struct GetMessagesArgs {
     pub conversation_id: String,
 }
 
+/// Arguments for the `submit_task` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SubmitTaskArgs {
+    /// Human-readable task description.
+    pub message: String,
+    /// Optional context (session) UUID string.
+    pub context_id: Option<String>,
+    /// Optional UUID string of the agent to assign the task to.
+    pub assignee: Option<String>,
+}
+
+/// Arguments for the `get_task` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetTaskArgs {
+    /// UUID string of the task to retrieve.
+    pub task_id: String,
+}
+
+/// Arguments for the `list_tasks` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListTasksArgs {
+    /// Filter by context UUID string.
+    pub context_id: Option<String>,
+    /// Filter by task state (e.g. `"submitted"`, `"working"`).
+    pub state: Option<String>,
+    /// Filter by assignee agent UUID string.
+    pub assignee: Option<String>,
+}
+
+/// Arguments for the `cancel_task` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CancelTaskArgs {
+    /// UUID string of the task to cancel.
+    pub task_id: String,
+    /// Optional reason for cancellation.
+    pub reason: Option<String>,
+}
+
 // ── Server struct ─────────────────────────────────────────────────────────────
 
 /// MCP server that exposes Trumpet's agent nexus capabilities as tools.
@@ -217,6 +255,157 @@ impl TrumpetMcpServer {
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         let json = serde_json::to_string(messages)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Submit a new task.
+    #[tool(description = "Submit a new task to the Trumpet nexus. Returns the created Task.")]
+    async fn submit_task(
+        &self,
+        Parameters(args): Parameters<SubmitTaskArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::core::task_types::{MessageRole, Part, TaskMessage};
+        use crate::core::types::MessageId;
+
+        let context_id = args
+            .context_id
+            .as_deref()
+            .map(|s| {
+                s.parse::<crate::core::ContextId>()
+                    .map_err(|e| McpError::invalid_params(format!("invalid context_id: {e}"), None))
+            })
+            .transpose()?;
+
+        let assignee = args
+            .assignee
+            .as_deref()
+            .map(|s| {
+                s.parse::<crate::core::types::AgentId>()
+                    .map_err(|e| McpError::invalid_params(format!("invalid assignee: {e}"), None))
+            })
+            .transpose()?;
+
+        let message = TaskMessage {
+            id: MessageId::new(),
+            role: MessageRole::User,
+            parts: vec![Part::Text { text: args.message }],
+            metadata: None,
+        };
+
+        let facade = crate::core::TaskFacade::new(
+            std::sync::Arc::clone(&self.state.tasks),
+            std::sync::Arc::clone(&self.state.registry),
+            Box::new(crate::core::DefaultTaskRouter),
+        );
+        let task = facade
+            .submit_task(message, context_id, assignee, None)
+            .await
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        let json = serde_json::to_string(&task)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Get a task by ID.
+    #[tool(description = "Retrieve a task by its UUID.")]
+    async fn get_task(
+        &self,
+        Parameters(args): Parameters<GetTaskArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let task_id = args
+            .task_id
+            .parse::<crate::core::TaskId>()
+            .map_err(|e| McpError::invalid_params(format!("invalid task_id: {e}"), None))?;
+
+        let facade = crate::core::TaskFacade::new(
+            std::sync::Arc::clone(&self.state.tasks),
+            std::sync::Arc::clone(&self.state.registry),
+            Box::new(crate::core::DefaultTaskRouter),
+        );
+        let task = facade
+            .get_task(&task_id)
+            .await
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        let json = serde_json::to_string(&task)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// List tasks with optional filters.
+    #[tool(description = "List tasks, optionally filtered by context_id, state, or assignee.")]
+    async fn list_tasks(
+        &self,
+        Parameters(args): Parameters<ListTasksArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let context_id = args
+            .context_id
+            .as_deref()
+            .map(|s| {
+                s.parse::<crate::core::ContextId>()
+                    .map_err(|e| McpError::invalid_params(format!("invalid context_id: {e}"), None))
+            })
+            .transpose()?;
+
+        let state_filter = args
+            .state
+            .as_deref()
+            .map(|s| {
+                serde_json::from_str::<crate::core::TaskState>(&format!("\"{s}\""))
+                    .map_err(|_| McpError::invalid_params(format!("invalid state: '{s}'"), None))
+            })
+            .transpose()?;
+
+        let assignee = args
+            .assignee
+            .as_deref()
+            .map(|s| {
+                s.parse::<crate::core::types::AgentId>()
+                    .map_err(|e| McpError::invalid_params(format!("invalid assignee: {e}"), None))
+            })
+            .transpose()?;
+
+        let filter = crate::core::TaskFilter {
+            context_id,
+            state: state_filter,
+            assignee,
+        };
+        let facade = crate::core::TaskFacade::new(
+            std::sync::Arc::clone(&self.state.tasks),
+            std::sync::Arc::clone(&self.state.registry),
+            Box::new(crate::core::DefaultTaskRouter),
+        );
+        let tasks = facade.list_tasks(&filter).await;
+
+        let json = serde_json::to_string(&tasks)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Cancel a task.
+    #[tool(description = "Cancel a task by its UUID.")]
+    async fn cancel_task(
+        &self,
+        Parameters(args): Parameters<CancelTaskArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let task_id = args
+            .task_id
+            .parse::<crate::core::TaskId>()
+            .map_err(|e| McpError::invalid_params(format!("invalid task_id: {e}"), None))?;
+
+        let facade = crate::core::TaskFacade::new(
+            std::sync::Arc::clone(&self.state.tasks),
+            std::sync::Arc::clone(&self.state.registry),
+            Box::new(crate::core::DefaultTaskRouter),
+        );
+        let task = facade
+            .cancel_task(&task_id, None)
+            .await
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        let json = serde_json::to_string(&task)
             .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
