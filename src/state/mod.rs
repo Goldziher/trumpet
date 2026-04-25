@@ -152,6 +152,7 @@ mod tests {
             name: "test-agent".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         };
         StateSnapshot {
             agents: vec![agent],
@@ -171,6 +172,7 @@ mod tests {
             name: "rich-agent".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         };
         let tool = ToolInfo {
             id: ToolId::new(),
@@ -251,6 +253,7 @@ mod tests {
                 name: "second".to_owned(),
                 registered_at: Utc::now(),
                 status: AgentStatus::Disconnected,
+                capabilities: None,
             }],
             tools: vec![],
             conversations: vec![],

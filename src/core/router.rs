@@ -68,6 +68,7 @@ mod tests {
             name: "test-agent".to_owned(),
             registered_at: Utc::now(),
             status,
+            capabilities: None,
         }
     }
 

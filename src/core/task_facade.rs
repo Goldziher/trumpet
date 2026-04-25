@@ -213,7 +213,7 @@ mod tests {
         // Register a connected agent.
         let agent = {
             let mut reg = registry.write().await;
-            reg.register("worker").unwrap()
+            reg.register("worker", None).unwrap()
         };
 
         let facade = TaskFacade::new(

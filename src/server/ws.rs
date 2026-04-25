@@ -158,6 +158,7 @@ mod tests {
             name: "test-agent".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         })
     }
 

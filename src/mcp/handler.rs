@@ -133,7 +133,7 @@ impl TrumpetMcpServer {
         let info = {
             let mut registry = self.state.registry.write().await;
             registry
-                .register(&args.name)
+                .register(&args.name, None)
                 .map_err(|e| McpError::invalid_params(e.to_string(), None))?
         };
         let json = serde_json::to_string(&info)

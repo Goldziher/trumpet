@@ -9,6 +9,7 @@ use ahash::AHashMap;
 use chrono::Utc;
 
 use crate::core::bus::{Event, MessageBus};
+use crate::core::task_types::AgentCapabilities;
 use crate::core::types::{AgentId, AgentInfo, AgentStatus};
 use crate::error::Error;
 
@@ -74,7 +75,7 @@ impl AgentRegistry {
         }
     }
 
-    /// Register a new agent with the given `name`.
+    /// Register a new agent with the given `name` and optional capabilities.
     ///
     /// Returns the newly created [`AgentInfo`] on success.
     ///
@@ -82,7 +83,11 @@ impl AgentRegistry {
     ///
     /// - [`Error::AgentInvalidName`] — `name` fails validation rules.
     /// - [`Error::AgentAlreadyRegistered`] — an agent with `name` is already registered.
-    pub fn register(&mut self, name: &str) -> Result<AgentInfo, Error> {
+    pub fn register(
+        &mut self,
+        name: &str,
+        capabilities: Option<AgentCapabilities>,
+    ) -> Result<AgentInfo, Error> {
         validate_name(name)?;
 
         if self.name_index.contains_key(name) {
@@ -96,6 +101,7 @@ impl AgentRegistry {
             name: name.to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities,
         };
 
         self.name_index.insert(info.name.clone(), info.id);
@@ -174,7 +180,7 @@ mod tests {
     async fn register_agent_succeeds() {
         let mut registry = make_registry();
         let info = registry
-            .register("claude-code-1")
+            .register("claude-code-1", None)
             .expect("register must succeed for a valid, unique name");
 
         assert_eq!(
@@ -192,11 +198,11 @@ mod tests {
     async fn register_duplicate_name_fails() {
         let mut registry = make_registry();
         registry
-            .register("worker")
+            .register("worker", None)
             .expect("first registration must succeed");
 
         let err = registry
-            .register("worker")
+            .register("worker", None)
             .expect_err("second registration with the same name must fail");
 
         assert!(
@@ -209,7 +215,7 @@ mod tests {
     async fn register_invalid_name_fails_empty_string() {
         let mut registry = make_registry();
         let err = registry
-            .register("")
+            .register("", None)
             .expect_err("empty name must be rejected");
 
         assert!(
@@ -223,7 +229,7 @@ mod tests {
         let mut registry = make_registry();
         let long_name = "a".repeat(65);
         let err = registry
-            .register(&long_name)
+            .register(&long_name, None)
             .expect_err("name exceeding 64 chars must be rejected");
 
         assert!(
@@ -236,7 +242,7 @@ mod tests {
     async fn register_name_with_leading_hyphen_fails() {
         let mut registry = make_registry();
         let err = registry
-            .register("-bad")
+            .register("-bad", None)
             .expect_err("leading hyphen must be rejected");
 
         assert!(
@@ -249,7 +255,7 @@ mod tests {
     async fn register_name_with_trailing_hyphen_fails() {
         let mut registry = make_registry();
         let err = registry
-            .register("bad-")
+            .register("bad-", None)
             .expect_err("trailing hyphen must be rejected");
 
         assert!(
@@ -262,7 +268,7 @@ mod tests {
     async fn register_name_with_invalid_char_fails() {
         let mut registry = make_registry();
         let err = registry
-            .register("bad name")
+            .register("bad name", None)
             .expect_err("space in name must be rejected");
 
         assert!(
@@ -277,7 +283,7 @@ mod tests {
     async fn deregister_removes_agent() {
         let mut registry = make_registry();
         let info = registry
-            .register("to-remove")
+            .register("to-remove", None)
             .expect("register must succeed");
 
         registry
@@ -311,7 +317,7 @@ mod tests {
     async fn get_returns_registered_agent() {
         let mut registry = make_registry();
         let info = registry
-            .register("lookup-me")
+            .register("lookup-me", None)
             .expect("register must succeed");
 
         let found = registry
@@ -327,8 +333,12 @@ mod tests {
     #[tokio::test]
     async fn find_by_name_works() {
         let mut registry = make_registry();
-        registry.register("alpha").expect("register must succeed");
-        let beta = registry.register("beta").expect("register must succeed");
+        registry
+            .register("alpha", None)
+            .expect("register must succeed");
+        let beta = registry
+            .register("beta", None)
+            .expect("register must succeed");
 
         let found = registry
             .find_by_name("beta")
@@ -362,12 +372,14 @@ mod tests {
                 name: "alpha".to_owned(),
                 registered_at: Utc::now(),
                 status: AgentStatus::Connected,
+                capabilities: None,
             },
             AgentInfo {
                 id: id2,
                 name: "beta".to_owned(),
                 registered_at: Utc::now(),
                 status: AgentStatus::Disconnected,
+                capabilities: None,
             },
         ];
 
@@ -389,7 +401,7 @@ mod tests {
     async fn restore_clears_previous_state() {
         let mut registry = make_registry();
         registry
-            .register("old-agent")
+            .register("old-agent", None)
             .expect("register must succeed");
 
         let new_agent = AgentInfo {
@@ -397,6 +409,7 @@ mod tests {
             name: "new-agent".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         };
         registry.restore(vec![new_agent]);
 
@@ -420,7 +433,7 @@ mod tests {
         let mut rx = bus.subscribe();
 
         let info = registry
-            .register("event-agent")
+            .register("event-agent", None)
             .expect("register must succeed");
 
         let event = rx
@@ -448,7 +461,7 @@ mod tests {
         let mut registry = AgentRegistry::new(Arc::clone(&bus));
 
         let info = registry
-            .register("to-deregister")
+            .register("to-deregister", None)
             .expect("register must succeed");
 
         let mut rx = bus.subscribe();

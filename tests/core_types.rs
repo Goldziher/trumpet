@@ -23,6 +23,7 @@ fn agent_info_constructs_and_serializes() {
         name: "integration-test-agent".to_owned(),
         registered_at: Utc::now(),
         status: AgentStatus::Connected,
+        capabilities: None,
     };
     let json = serde_json::to_string(&info).expect("AgentInfo must serialize");
     assert!(

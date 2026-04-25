@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+use crate::core::task_types::AgentCapabilities;
+
 /// Unique identifier for a registered agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(Uuid);
@@ -151,6 +153,9 @@ pub struct AgentInfo {
     pub registered_at: DateTime<Utc>,
     /// Current connectivity status.
     pub status: AgentStatus,
+    /// Optional capabilities advertised by this agent (ADR-015).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<AgentCapabilities>,
 }
 
 /// A single message exchanged within a [`Conversation`].
@@ -279,6 +284,7 @@ mod tests {
             name: "claude-code-1".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         };
         let json = serde_json::to_string(&original).expect("serialization must succeed");
         let recovered: AgentInfo =

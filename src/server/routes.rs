@@ -104,7 +104,7 @@ async fn register_agent(
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<AgentInfo>> {
     let mut registry = state.registry.write().await;
-    let info = registry.register(&req.name)?;
+    let info = registry.register(&req.name, None)?;
     Ok(Json(info))
 }
 
@@ -417,6 +417,7 @@ mod tests {
             name: "test".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         };
         assert_eq!(
             Event::AgentRegistered(info).event_type(),
@@ -482,6 +483,7 @@ mod tests {
             name: "test".to_owned(),
             registered_at: Utc::now(),
             status: AgentStatus::Connected,
+            capabilities: None,
         };
         let event = Event::AgentRegistered(info);
         let json = serde_json::to_string(&event).expect("Event must serialize");
