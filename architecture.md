@@ -2,7 +2,7 @@
 
 ## Overview
 
-Trumpet is an **agent nexus** -- a persistent background service that coordinates multiple AI agents. It runs as a daemon, allowing agents in different terminals (e.g. Claude Code, Codex) to share state, skills, and conversations through a common substrate. It provides agent discovery, task routing, state management, and inter-agent communication through multiple protocol interfaces.
+Trumpet is an **agent nexus** -- a persistent background service that coordinates multiple AI agents. It runs as a daemon, allowing agents in different terminals (e.g. Claude Code, Codex) to share state, tools, and conversations through a common substrate. It provides agent discovery, task routing, state management, and inter-agent communication through multiple protocol interfaces.
 
 ## High-Level Architecture
 
@@ -36,7 +36,7 @@ Trumpet is an **agent nexus** -- a persistent background service that coordinate
 │  │  │  Registry  │ │  Router  │ │  Bus          │  │  │
 │  │  └────────────┘ └──────────┘ └───────────────┘  │  │
 │  │  ┌────────────┐ ┌───────────────────────────┐   │  │
-│  │  │  Skill     │ │  Chat / Conversation      │   │  │
+│  │  │  Tool      │ │  Chat / Conversation      │   │  │
 │  │  │  Registry  │ │  Manager                  │   │  │
 │  │  └────────────┘ └───────────────────────────┘   │  │
 │  │                                                 │  │
@@ -70,7 +70,7 @@ Trumpet is an **agent nexus** -- a persistent background service that coordinate
 - **Agent Registry**: Tracks registered agents, their capabilities, and lifecycle state (idle, busy, error, disconnected).
 - **Task Router**: Matches incoming tasks to agents based on capability requirements and agent availability.
 - **Message Bus**: Internal broadcast system (`tokio::sync::broadcast`) for event propagation. Each transport adapter subscribes and forwards events in its native format.
-- **Skill Registry**: Manages callable tools ("skills") that agents provide and consume. Skills are registered by agents, users, or built-in. Exposed as MCP tools, gRPC RPCs, and REST endpoints. Emits `list_changed` notifications when skills are added or removed.
+- **Tool Registry**: Manages callable tools that agents provide and consume (ADR-016). Tools are registered by agents, users, or built-in. Exposed as MCP tools, gRPC RPCs, and REST endpoints. Emits `list_changed` notifications when tools are added or removed.
 - **Chat / Conversation Manager**: Manages chat-like message threads between agents. Agents can open conversations, send messages, and subscribe to updates -- enabling collaborative, multi-turn interactions between agents.
 - **State Manager**: In-memory state with write-behind persistence via OpenDAL. Supports snapshot + journal for crash recovery. Default backend is `fs` at `~/.trumpet/state/`, configurable to any OpenDAL-supported backend.
 
@@ -110,7 +110,7 @@ trumpet/
 │   │   ├── registry.rs  # Agent registry
 │   │   ├── router.rs    # Task router
 │   │   ├── bus.rs       # Message bus (broadcast)
-│   │   ├── skills.rs    # Skill registry
+│   │   ├── tools.rs     # Tool registry
 │   │   └── chat.rs      # Conversation manager
 │   ├── state/           # State manager, OpenDAL integration
 │   └── daemon/          # Process management, PID file, signals
