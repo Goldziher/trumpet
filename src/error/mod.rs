@@ -72,6 +72,11 @@ pub enum Error {
     #[error("conversation must have at least one participant")]
     ConversationEmptyParticipants,
 
+    // ── Input ─────────────────────────────────────────────────────────────────
+    /// A request parameter is malformed or out of range.
+    #[error("invalid input: {reason}")]
+    InvalidInput { reason: String },
+
     // ── Tool ──────────────────────────────────────────────────────────────────
     /// No tool with this name is registered.
     #[error("tool '{name}' not found")]
@@ -170,6 +175,7 @@ impl ErrorCode for Error {
             Self::ConversationNotFound { .. } => "CONVERSATION_NOT_FOUND",
             Self::ConversationNotParticipant { .. } => "CONVERSATION_NOT_PARTICIPANT",
             Self::ConversationEmptyParticipants => "CONVERSATION_EMPTY_PARTICIPANTS",
+            Self::InvalidInput { .. } => "INVALID_INPUT",
             Self::ToolNotFound { .. } => "TOOL_NOT_FOUND",
             Self::ToolNotFoundById { .. } => "TOOL_NOT_FOUND_BY_ID",
             Self::ToolAlreadyRegistered { .. } => "TOOL_ALREADY_REGISTERED",
@@ -214,7 +220,8 @@ impl ErrorCode for Error {
             | Self::ToolNotFound { .. }
             | Self::ToolNotFoundById { .. }
             | Self::ConfigMissingDir { .. } => StatusCode::NOT_FOUND,
-            Self::AgentInvalidName { .. }
+            Self::InvalidInput { .. }
+            | Self::AgentInvalidName { .. }
             | Self::ToolInvalidName { .. }
             | Self::ToolInvalidDescription { .. }
             | Self::ConversationEmptyParticipants
@@ -262,6 +269,9 @@ impl ErrorCode for Error {
             }
             Self::AgentInvalidName { .. } => {
                 "agent names must be non-empty alphanumeric strings (hyphens allowed)".to_owned()
+            }
+            Self::InvalidInput { reason } => {
+                format!("check request parameters: {reason}")
             }
             Self::ConversationNotFound { id } => {
                 format!("list conversations with `trumpet chat list`; '{id}' was not found")
@@ -400,6 +410,9 @@ mod tests {
                 id: "abc-123".to_owned(),
             },
             Error::ConversationEmptyParticipants,
+            Error::InvalidInput {
+                reason: "bad uuid".to_owned(),
+            },
             Error::ToolNotFound {
                 name: "scan".to_owned(),
             },

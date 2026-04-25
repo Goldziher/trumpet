@@ -241,10 +241,9 @@ async fn submit_task(
         .context_id
         .as_deref()
         .map(|s| {
-            s.parse::<ContextId>()
-                .map_err(|_| Error::ConfigValidationFailed {
-                    reason: format!("invalid context_id UUID: '{s}'"),
-                })
+            s.parse::<ContextId>().map_err(|_| Error::InvalidInput {
+                reason: format!("invalid context_id UUID: '{s}'"),
+            })
         })
         .transpose()?;
 
@@ -252,10 +251,9 @@ async fn submit_task(
         .assignee
         .as_deref()
         .map(|s| {
-            s.parse::<AgentId>()
-                .map_err(|_| Error::ConfigValidationFailed {
-                    reason: format!("invalid assignee UUID: '{s}'"),
-                })
+            s.parse::<AgentId>().map_err(|_| Error::InvalidInput {
+                reason: format!("invalid assignee UUID: '{s}'"),
+            })
         })
         .transpose()?;
 
@@ -295,10 +293,9 @@ async fn list_tasks_handler(
         .context_id
         .as_deref()
         .map(|s| {
-            s.parse::<ContextId>()
-                .map_err(|_| Error::ConfigValidationFailed {
-                    reason: format!("invalid context_id UUID: '{s}'"),
-                })
+            s.parse::<ContextId>().map_err(|_| Error::InvalidInput {
+                reason: format!("invalid context_id UUID: '{s}'"),
+            })
         })
         .transpose()?;
 
@@ -306,10 +303,9 @@ async fn list_tasks_handler(
         .state
         .as_deref()
         .map(|s| {
-            s.parse::<TaskState>()
-                .map_err(|_| Error::ConfigValidationFailed {
-                    reason: format!("'{s}' is not a valid task state"),
-                })
+            s.parse::<TaskState>().map_err(|_| Error::InvalidInput {
+                reason: format!("'{s}' is not a valid task state"),
+            })
         })
         .transpose()?;
 
@@ -317,10 +313,9 @@ async fn list_tasks_handler(
         .assignee
         .as_deref()
         .map(|s| {
-            s.parse::<AgentId>()
-                .map_err(|_| Error::ConfigValidationFailed {
-                    reason: format!("invalid assignee UUID: '{s}'"),
-                })
+            s.parse::<AgentId>().map_err(|_| Error::InvalidInput {
+                reason: format!("invalid assignee UUID: '{s}'"),
+            })
         })
         .transpose()?;
 

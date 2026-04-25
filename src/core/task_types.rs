@@ -659,4 +659,30 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn task_state_from_str_round_trips() {
+        let cases = [
+            ("submitted", TaskState::Submitted),
+            ("working", TaskState::Working),
+            ("completed", TaskState::Completed),
+            ("failed", TaskState::Failed),
+            ("canceled", TaskState::Canceled),
+            ("input_required", TaskState::InputRequired),
+            ("rejected", TaskState::Rejected),
+            ("auth_required", TaskState::AuthRequired),
+        ];
+        for (s, expected) in cases {
+            let parsed: TaskState = s.parse().expect("must parse known variant");
+            assert_eq!(parsed, expected, "round-trip failed for '{s}'");
+        }
+    }
+
+    #[test]
+    fn task_state_from_str_invalid_returns_error() {
+        assert!(
+            "unknown".parse::<TaskState>().is_err(),
+            "unknown state string must return Err"
+        );
+    }
 }

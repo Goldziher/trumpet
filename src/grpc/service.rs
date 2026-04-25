@@ -63,8 +63,6 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
             )
         };
 
-        // Extract assignee from task_id if this is a reply to an existing task.
-        // For new tasks, we let the router decide.
         let facade = self.make_facade();
         let task = facade
             .submit_task(core_msg, context_id, None, None)
@@ -140,10 +138,13 @@ impl proto::a2a_service_server::A2aService for NexusA2aService {
         let proto_tasks: Vec<proto::Task> = tasks.iter().map(convert::core_task_to_proto).collect();
         let total = proto_tasks.len() as i32;
 
+        // TODO: implement pagination (page_size, page_token) per A2A spec.
+        // Currently returns all matching tasks in a single page.
+        let requested_page_size = req.page_size.unwrap_or(50).clamp(1, 100);
         Ok(Response::new(proto::ListTasksResponse {
             tasks: proto_tasks,
             next_page_token: String::new(),
-            page_size: total,
+            page_size: requested_page_size,
             total_size: total,
         }))
     }

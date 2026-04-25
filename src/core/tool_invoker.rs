@@ -210,4 +210,40 @@ mod tests {
             "agent tool must return TaskCreated result"
         );
     }
+
+    #[tokio::test]
+    async fn invoke_agent_tool_disconnected_returns_unavailable() {
+        let invoker = make_invoker();
+
+        // Register an agent, then disconnect it.
+        let agent_id = {
+            let mut reg = invoker.registry.write().await;
+            let info = reg.register("offline-agent", None).unwrap();
+            info.id
+        };
+        {
+            let mut reg = invoker.registry.write().await;
+            reg.deregister(&agent_id).unwrap();
+        }
+
+        // Tool still references the agent but agent is gone.
+        {
+            let mut tools = invoker.tools.write().await;
+            tools
+                .register(
+                    "agent.gone",
+                    "Gone agent",
+                    serde_json::json!({}),
+                    serde_json::json!({}),
+                    ToolProvider::Agent { agent_id },
+                )
+                .unwrap();
+        }
+
+        let result = invoker.invoke("agent.gone", serde_json::json!({})).await;
+        assert!(
+            matches!(result, Err(Error::ToolProviderUnavailable { .. })),
+            "deregistered agent must return ToolProviderUnavailable"
+        );
+    }
 }

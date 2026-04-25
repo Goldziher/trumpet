@@ -206,7 +206,16 @@ fn json_to_prost_value(val: serde_json::Value) -> prost_types::Value {
     let kind = match val {
         serde_json::Value::Null => Kind::NullValue(0),
         serde_json::Value::Bool(b) => Kind::BoolValue(b),
-        serde_json::Value::Number(n) => Kind::NumberValue(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::Number(n) => {
+            // as_f64() returns None for integers outside f64 representable range.
+            // Fall back to i64 → f64 cast (lossy for very large values).
+            let f = n
+                .as_f64()
+                .or_else(|| n.as_i64().map(|i| i as f64))
+                .or_else(|| n.as_u64().map(|u| u as f64))
+                .unwrap_or(0.0);
+            Kind::NumberValue(f)
+        }
         serde_json::Value::String(s) => Kind::StringValue(s),
         serde_json::Value::Array(arr) => Kind::ListValue(prost_types::ListValue {
             values: arr.into_iter().map(json_to_prost_value).collect(),
