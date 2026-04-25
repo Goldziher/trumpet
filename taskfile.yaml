@@ -1,0 +1,73 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  setup:
+    desc: "Install all dependencies and initialize project. Idempotent."
+    cmds:
+      - cargo fetch
+      - prek install
+      - prek install --hook-type commit-msg
+      - echo "Setup complete"
+
+  build:
+    desc: Build the project
+    cmds:
+      - cargo build
+
+  build:release:
+    desc: Build in release mode
+    cmds:
+      - cargo build --release
+
+  test:
+    desc: Run all tests
+    cmds:
+      - cargo test
+
+  test:verbose:
+    desc: Run all tests with verbose output
+    cmds:
+      - cargo test -- --nocapture
+
+  lint:
+    desc: Run all linters and formatters via prek
+    cmds:
+      - prek run --all-files
+
+  check:
+    desc: Run all checks (lint + test)
+    cmds:
+      - task: lint
+      - task: test
+
+  coverage:
+    desc: Generate coverage report
+    cmds:
+      - cargo llvm-cov
+
+  generate:
+    desc: Generate ai-rulez configuration files
+    cmds:
+      - npx ai-rulez@latest generate
+
+  update:
+    desc: Update dependencies and pre-commit hooks
+    cmds:
+      - cargo update
+      - prek autoupdate
+
+  upgrade:
+    desc: Upgrade dependencies to latest (including incompatible) then update
+    cmds:
+      - cargo upgrade --incompatible
+      - task: update
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cargo clean

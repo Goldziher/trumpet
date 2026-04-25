@@ -1,0 +1,18 @@
+version = "4.0"
+name = "Trumpet"
+description = "Agent nexus — a persistent background service that orchestrates multiple AI agents through shared state, skills, and conversations."
+gitignore = true
+
+presets = ["claude", "codex", "cursor"]
+
+builtins = [
+  "rust",
+  "security",
+  "git-workflow",
+  "code-quality",
+  "testing",
+  "default-commands",
+  "docker",
+  "observability",
+  "documentation",
+]
