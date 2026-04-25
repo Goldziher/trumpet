@@ -10,10 +10,18 @@ pub async fn ensure_trumpet_dir(path: &Path) -> std::io::Result<()> {
     tokio::fs::create_dir_all(path).await
 }
 
-/// Write the current process PID to a file.
+/// Write the current process PID to a file with `0o600` permissions.
 pub async fn write_pid_file(path: &Path) -> std::io::Result<()> {
     let pid = std::process::id();
-    tokio::fs::write(path, pid.to_string()).await
+    tokio::fs::write(path, pid.to_string()).await?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
+    }
+
+    Ok(())
 }
 
 /// Read the PID from a PID file.

@@ -381,6 +381,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn restore_clears_previous_state() {
+        let mut registry = make_registry();
+        registry
+            .register("old-agent")
+            .expect("register must succeed");
+
+        let new_agent = AgentInfo {
+            id: AgentId::new(),
+            name: "new-agent".to_owned(),
+            registered_at: Utc::now(),
+            status: AgentStatus::Connected,
+        };
+        registry.restore(vec![new_agent]);
+
+        assert_eq!(registry.list().len(), 1, "restore must replace, not append");
+        assert!(
+            registry.find_by_name("old-agent").is_none(),
+            "old agent must be gone after restore"
+        );
+        assert!(
+            registry.find_by_name("new-agent").is_some(),
+            "new agent must be present after restore"
+        );
+    }
+
     // ── bus events ────────────────────────────────────────────────────────────
 
     #[tokio::test]

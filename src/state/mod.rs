@@ -1,8 +1,8 @@
 //! Persistent state management for the Trumpet daemon.
 //!
 //! [`StateManager`] uses an OpenDAL [`Operator`] to read and write
-//! [`StateSnapshot`] blobs. The snapshot file is `snapshot.bin` within the
-//! configured storage root and is encoded with `bincode` for compactness.
+//! [`StateSnapshot`] blobs. The snapshot file is `snapshot.msgpack` within the
+//! configured storage root and is serialized as MessagePack for compactness.
 
 pub mod snapshot;
 
@@ -59,7 +59,7 @@ impl StateManager {
         Ok(Self { operator })
     }
 
-    /// Serialise `snapshot` with bincode and persist it as `snapshot.bin`.
+    /// Serialise `snapshot` with bincode and persist it as `snapshot.msgpack`.
     ///
     /// An existing snapshot is atomically overwritten.
     ///
@@ -67,15 +67,15 @@ impl StateManager {
     ///
     /// Returns [`Error::StateSnapshotFailed`] on encode or I/O failure.
     pub async fn save_snapshot(&self, snapshot: &StateSnapshot) -> Result<(), Error> {
-        let bytes = serde_json::to_vec(snapshot).map_err(|e| Error::StateSnapshotFailed {
+        let bytes = rmp_serde::to_vec(snapshot).map_err(|e| Error::StateSnapshotFailed {
             reason: format!("encoding snapshot: {e}"),
         })?;
 
         self.operator
-            .write("snapshot.bin", bytes)
+            .write("snapshot.msgpack", bytes)
             .await
             .map_err(|e| Error::StateSnapshotFailed {
-                reason: format!("writing snapshot.bin: {e}"),
+                reason: format!("writing snapshot.msgpack: {e}"),
             })?;
 
         Ok(())
@@ -89,18 +89,27 @@ impl StateManager {
     ///
     /// Returns [`Error::StateRestoreFailed`] on I/O or decode failure.
     pub async fn load_snapshot(&self) -> Result<Option<StateSnapshot>, Error> {
-        match self.operator.read("snapshot.bin").await {
+        match self.operator.read("snapshot.msgpack").await {
             Ok(buf) => {
+                const MAX_SNAPSHOT_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
                 let bytes = buf.to_vec();
+                if bytes.len() > MAX_SNAPSHOT_SIZE {
+                    return Err(Error::StateRestoreFailed {
+                        reason: format!(
+                            "snapshot too large ({} bytes, max {MAX_SNAPSHOT_SIZE})",
+                            bytes.len()
+                        ),
+                    });
+                }
                 let snapshot: StateSnapshot =
-                    serde_json::from_slice(&bytes).map_err(|e| Error::StateRestoreFailed {
-                        reason: format!("decoding snapshot.bin: {e}"),
+                    rmp_serde::from_slice(&bytes).map_err(|e| Error::StateRestoreFailed {
+                        reason: format!("decoding snapshot: {e}"),
                     })?;
                 Ok(Some(snapshot))
             }
             Err(e) if e.kind() == opendal::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(Error::StateRestoreFailed {
-                reason: format!("reading snapshot.bin: {e}"),
+                reason: format!("reading snapshot.msgpack: {e}"),
             }),
         }
     }

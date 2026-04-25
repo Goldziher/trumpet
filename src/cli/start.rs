@@ -1,5 +1,6 @@
 //! `trumpet start` subcommand — spawns the daemon as a detached background process.
 
+use std::os::unix::process::CommandExt as _;
 use std::time::Duration;
 
 use tokio::time::sleep;
@@ -34,11 +35,16 @@ pub async fn run_start() -> Result<()> {
 
     debug!(exe = %exe.display(), "spawning daemon");
 
+    let exe = exe.canonicalize().map_err(|e| Error::InternalUnexpected {
+        reason: format!("failed to canonicalize executable path: {e}"),
+    })?;
+
     std::process::Command::new(&exe)
         .arg("serve")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        .process_group(0)
         .spawn()
         .map_err(|e| Error::InternalUnexpected {
             reason: format!("failed to spawn daemon: {e}"),

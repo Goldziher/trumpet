@@ -1,8 +1,7 @@
 //! Serializable snapshot of all in-memory daemon state.
 //!
 //! A [`StateSnapshot`] captures agents, skills, conversations, and messages
-//! at a point in time. It is encoded with `bincode` for compact binary
-//! representation and written to `snapshot.bin` by [`super::StateManager`].
+//! at a point in time. It is serialized as MessagePack and written to `snapshot.msgpack` by [`super::StateManager`].
 
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_round_trip_via_bincode() {
+    fn snapshot_round_trip_via_msgpack() {
         let agent1 = make_agent_info("agent-one");
         let agent2 = make_agent_info("agent-two");
         let skill1 = make_skill_info("skill-one");
@@ -88,10 +87,10 @@ mod tests {
             messages: vec![(conv.id, vec![msg1.clone(), msg2.clone()])],
         };
 
-        let encoded = serde_json::to_vec(&original).expect("JSON encoding must succeed");
+        let encoded = rmp_serde::to_vec(&original).expect("MessagePack encoding must succeed");
 
         let decoded: StateSnapshot =
-            serde_json::from_slice(&encoded).expect("JSON decoding must succeed");
+            rmp_serde::from_slice(&encoded).expect("MessagePack decoding must succeed");
 
         assert_eq!(
             decoded.agents.len(),

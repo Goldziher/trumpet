@@ -25,25 +25,32 @@ pub async fn run_stop() -> Result<()> {
     let config = Config::load()?;
 
     let pid_path = &config.daemon.pid_file;
+    let socket_path = &config.daemon.socket_path;
 
-    if !pid_path.exists() {
-        return Err(Error::DaemonNotRunning);
-    }
+    let pid = match read_pid_file(pid_path).await {
+        Ok(p) => p,
+        Err(_) => return Err(Error::DaemonNotRunning),
+    };
 
-    let pid = read_pid_file(pid_path)
-        .await
-        .map_err(|e| Error::InternalUnexpected {
-            reason: format!("failed to read pid file: {e}"),
-        })?;
+    let raw_pid = i32::try_from(pid).map_err(|_| Error::InternalUnexpected {
+        reason: format!("PID {pid} exceeds i32::MAX"),
+    })?;
 
     debug!(pid, "sending SIGTERM to daemon");
 
-    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).map_err(|e| Error::InternalUnexpected {
-        reason: format!("failed to send SIGTERM to pid {pid}: {e}"),
-    })?;
+    if let Err(e) = kill(Pid::from_raw(raw_pid), Signal::SIGTERM) {
+        if e == nix::errno::Errno::ESRCH {
+            // Process already dead — clean up stale files.
+            let _ = remove_pid_file(pid_path).await;
+            let _ = remove_stale_socket(socket_path).await;
+            return Err(Error::DaemonNotRunning);
+        }
+        return Err(Error::InternalUnexpected {
+            reason: format!("failed to send SIGTERM to pid {pid}: {e}"),
+        });
+    }
 
     // Poll for up to 5 seconds in 200 ms increments.
-    let socket_path = &config.daemon.socket_path;
     const POLL_INTERVAL: Duration = Duration::from_millis(200);
     const MAX_POLLS: u32 = 25; // 25 × 200 ms = 5 s
 
