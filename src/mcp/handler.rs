@@ -3,11 +3,17 @@
 //! [`TrumpetMcpServer`] exposes tools for managing agents, tools, and
 //! conversations over the Model Context Protocol.
 
+use std::sync::Arc;
+
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::{
-    ErrorData as McpError, ServerHandler, handler::server::router::tool::ToolRouter,
-    handler::server::wrapper::Parameters, model::*, schemars, tool, tool_handler, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
+    handler::server::wrapper::Parameters, model::*, schemars, service::NotificationContext,
+    service::RequestContext, tool, tool_router,
 };
 
+use crate::core::ToolInvoker;
+use crate::core::tools::ToolResult;
 use crate::server::AppState;
 
 // ── Argument types ────────────────────────────────────────────────────────────
@@ -406,14 +412,123 @@ impl TrumpetMcpServer {
 
 // ── ServerHandler ─────────────────────────────────────────────────────────────
 
-#[tool_handler(router = self.tool_router)]
 impl ServerHandler for TrumpetMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("trumpet", env!("CARGO_PKG_VERSION")))
-            .with_protocol_version(ProtocolVersion::V_2024_11_05)
-            .with_instructions("Trumpet agent nexus — manage agents, tools, and conversations.")
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+        .with_server_info(Implementation::new("trumpet", env!("CARGO_PKG_VERSION")))
+        .with_protocol_version(ProtocolVersion::V_2024_11_05)
+        .with_instructions("Trumpet agent nexus — manage agents, tools, and conversations.")
     }
+
+    /// List both the built-in nexus tools and any dynamically-registered
+    /// tools from the [`ToolRegistry`](crate::core::tools::ToolRegistry).
+    ///
+    /// Static tools come from the `#[tool_router]`-generated `tool_router`;
+    /// dynamic tools (built-ins like `code.*` and agent-provided ones) are
+    /// pulled live from `state.tools` so each `tools/list` reflects the
+    /// current registry contents.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let mut tools = self.tool_router.list_all();
+        let registry = self.state.tools.read().await;
+        for info in registry.list() {
+            tools.push(tool_from_registry_info(info));
+        }
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    /// Look up a tool by name across both routers.
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        if let Some(t) = self.tool_router.get(name) {
+            return Some(t.clone());
+        }
+        // Synchronous lookup of dynamic tools is tricky because the registry
+        // is async-locked. Falling back to `None` means the rmcp framework
+        // will not pre-validate the call; `call_tool` does its own resolution.
+        let _ = name;
+        None
+    }
+
+    /// Dispatch a tool call to the static router or the dynamic registry.
+    ///
+    /// Static tools (the nexus management surface) execute via the
+    /// `#[tool_router]`-generated dispatch. Anything not in the static set
+    /// is resolved against `state.tools` and run through [`ToolInvoker`].
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        if self.tool_router.has_route(request.name.as_ref()) {
+            let tcc = ToolCallContext::new(self, request, context);
+            return self.tool_router.call(tcc).await;
+        }
+
+        let invoker = ToolInvoker::new(
+            Arc::clone(&self.state.tools),
+            Arc::clone(&self.state.code_tools),
+            Arc::clone(&self.state.task_facade),
+            Arc::clone(&self.state.registry),
+        );
+
+        let input = request
+            .arguments
+            .map(serde_json::Value::Object)
+            .unwrap_or(serde_json::Value::Null);
+
+        let result = invoker
+            .invoke(request.name.as_ref(), input)
+            .await
+            .map_err(|e| match e {
+                crate::error::Error::ToolNotFound { .. } => {
+                    McpError::invalid_params(e.to_string(), None)
+                }
+                _ => McpError::internal_error(e.to_string(), None),
+            })?;
+
+        let payload = match result {
+            ToolResult::Immediate { output } => output,
+            ToolResult::TaskCreated { task } => serde_json::json!({
+                "type": "task_created",
+                "task": task,
+            }),
+        };
+        let json = serde_json::to_string(&payload)
+            .map_err(|e| McpError::internal_error(format!("serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// On client `initialized`, spawn a notifier that forwards tool-registry
+    /// changes from the bus to the peer as `notifications/tools/list_changed`.
+    async fn on_initialized(&self, ctx: NotificationContext<RoleServer>) {
+        let bus = Arc::clone(&self.state.bus);
+        tokio::spawn(crate::mcp::notifier::run_tool_notifier(bus, ctx.peer));
+    }
+}
+
+/// Convert a Trumpet [`ToolInfo`](crate::core::types::ToolInfo) into the rmcp
+/// [`Tool`] shape used by `tools/list`.
+fn tool_from_registry_info(info: &crate::core::types::ToolInfo) -> Tool {
+    let input_schema = info.input_schema.as_object().cloned().unwrap_or_default();
+    let output_schema = info.output_schema.as_object().cloned().map(Arc::new);
+    let mut tool = Tool::default();
+    tool.name = info.name.clone().into();
+    tool.description = Some(info.description.clone().into());
+    tool.input_schema = Arc::new(input_schema);
+    tool.output_schema = output_schema;
+    tool
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -550,6 +665,47 @@ mod tests {
             .as_str();
         let convs: Vec<serde_json::Value> = serde_json::from_str(text).expect("valid JSON");
         assert!(convs.is_empty(), "expected no conversations initially");
+    }
+
+    #[tokio::test]
+    async fn tool_from_registry_info_round_trips_name_and_description() {
+        let info = crate::core::types::ToolInfo {
+            id: crate::core::types::ToolId::new(),
+            name: "agent.greet".into(),
+            description: "say hi".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: serde_json::json!({"type": "object"}),
+            provider: crate::core::types::ToolProvider::BuiltIn,
+        };
+        let tool = super::tool_from_registry_info(&info);
+        assert_eq!(tool.name.as_ref(), "agent.greet");
+        assert_eq!(
+            tool.description.as_ref().map(|c| c.as_ref()),
+            Some("say hi"),
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_tool_is_visible_via_state() {
+        let server = make_server();
+        {
+            let mut tools = server.state.tools.write().await;
+            tools
+                .register(
+                    "agent.greet",
+                    "say hi",
+                    serde_json::json!({"type": "object"}),
+                    serde_json::json!({"type": "object"}),
+                    crate::core::types::ToolProvider::BuiltIn,
+                )
+                .expect("register must succeed");
+        }
+        // Confirm the dynamic registry sees it; list_tools merges this
+        // listing with the static `tool_router` set, exercised end-to-end
+        // through MCP in tests/mcp_*_e2e.rs.
+        let registry = server.state.tools.read().await;
+        let names: Vec<_> = registry.list().iter().map(|t| t.name.clone()).collect();
+        assert!(names.contains(&"agent.greet".to_owned()));
     }
 
     #[tokio::test]

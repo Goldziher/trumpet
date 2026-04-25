@@ -87,7 +87,12 @@ mod tests {
     use super::*;
 
     /// A socket path that does not exist should produce `DaemonNotRunning`.
+    ///
+    /// Marked `#[serial]` because `Config::load` reads `$HOME` and
+    /// `config::loader::tests::missing_home_returns_validation_error`
+    /// removes/restores it concurrently when the suite runs unguarded.
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_run_status_returns_daemon_not_running_when_no_socket() {
         // Use a path that is guaranteed not to exist.
         let config_result = Config::load();

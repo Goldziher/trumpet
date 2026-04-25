@@ -4,3 +4,4 @@
 //! for agent management, tool discovery, and conversation handling.
 
 pub mod handler;
+pub mod notifier;
