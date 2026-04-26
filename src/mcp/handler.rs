@@ -456,11 +456,45 @@ impl ServerHandler for TrumpetMcpServer {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
+                .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_server_info(Implementation::new("trumpet", env!("CARGO_PKG_VERSION")))
         .with_protocol_version(ProtocolVersion::V_2024_11_05)
         .with_instructions("Trumpet agent nexus — manage agents, tools, and conversations.")
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(crate::mcp::resources::list_resources())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        crate::mcp::resources::read_resource(&self.state, request).await
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(crate::mcp::prompts::list_prompts())
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, McpError> {
+        crate::mcp::prompts::get_prompt(&self.state, request).await
     }
 
     /// List both the built-in nexus tools and any dynamically-registered
