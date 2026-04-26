@@ -406,7 +406,26 @@ async fn events(
 pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    router_with_mcp(state, None)
+}
+
+/// Build the daemon's axum [`Router`], optionally nesting the MCP HTTP
+/// transport at `/mcp`.
+///
+/// When `mcp_service` is `Some`, the rmcp streamable-HTTP service is mounted
+/// alongside the REST routes. It shares the daemon's Unix socket listener
+/// (and therefore the same peer-credential auth check) — there is no second
+/// listener for MCP traffic.
+pub fn router_with_mcp(
+    state: AppState,
+    mcp_service: Option<
+        rmcp::transport::streamable_http_server::tower::StreamableHttpService<
+            crate::mcp::handler::TrumpetMcpServer,
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+        >,
+    >,
+) -> Router {
+    let mut router = Router::new()
         .route("/health", get(health_check))
         .route("/agents", get(list_agents))
         .route("/agents/register", post(register_agent))
@@ -430,7 +449,13 @@ pub fn router(state: AppState) -> Router {
         .route("/events", get(events))
         .route("/ws", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(mcp_service) = mcp_service {
+        router = router.route_service("/mcp", mcp_service);
+    }
+
+    router
 }
 
 #[cfg(test)]

@@ -163,11 +163,14 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
     });
 
     // ── MCP server ───────────────────────────────────────────────────────────
-    let mcp_handle = if config.mcp.enabled {
+    // `mcp_handle` only carries the stdio task. The HTTP transport is mounted
+    // into the axum router below, so it shares the Unix socket and auth.
+    let mut mcp_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mcp_http_service = if config.mcp.enabled {
         match config.mcp.transport {
             McpTransport::Stdio => {
                 let mcp_server = crate::mcp::handler::TrumpetMcpServer::new(state.clone());
-                Some(tokio::spawn(async move {
+                mcp_handle = Some(tokio::spawn(async move {
                     info!("MCP server starting on stdio");
                     let transport = rmcp::transport::io::stdio();
                     match mcp_server.serve(transport).await {
@@ -180,12 +183,13 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
                             tracing::error!(error = %e, "MCP stdio server failed to start");
                         }
                     }
-                }))
+                }));
+                None
             }
             McpTransport::Http => {
-                return Err(crate::error::Error::ConfigValidationFailed {
-                    reason: "mcp.transport = \"http\" is configured but the HTTP transport is not yet implemented; use \"stdio\" or set mcp.enabled = false".to_owned(),
-                });
+                info!("MCP server starting on HTTP (mounted under /mcp on the Unix socket)");
+                let mcp_server = crate::mcp::handler::TrumpetMcpServer::new(state.clone());
+                Some(crate::mcp::http::build_service(mcp_server, cancel.clone()))
             }
         }
     } else {
@@ -233,7 +237,7 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
     });
 
     // ── HTTP server ──────────────────────────────────────────────────────────
-    let app = routes::router(state.clone());
+    let app = routes::router_with_mcp(state.clone(), mcp_http_service);
 
     let http_cancel = cancel.clone();
     axum::serve(secured_listener, app)

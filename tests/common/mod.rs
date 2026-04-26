@@ -311,30 +311,94 @@ pub async fn unix_post(
 }
 
 fn parse_http_response(raw: &[u8]) -> (u16, Vec<u8>) {
-    // Find the status line.
+    let (status, _headers, body) = parse_http_response_full(raw);
+    (status, body)
+}
+
+/// Send an arbitrary HTTP/1.1 request over the daemon's Unix socket.
+///
+/// Generalises [`unix_get`] / [`unix_post`] for tests that need to set
+/// custom request headers (e.g. MCP requires `Accept: application/json,
+/// text/event-stream`) or read response headers (e.g. `Mcp-Session-Id`).
+pub async fn unix_request_with_headers(
+    socket: &std::path::Path,
+    method: &str,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .expect("connect to daemon socket");
+    let mut header = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    for (k, v) in extra_headers {
+        header.push_str(&format!("{k}: {v}\r\n"));
+    }
+    header.push_str("\r\n");
+    stream
+        .write_all(header.as_bytes())
+        .await
+        .expect("write header");
+    if !body.is_empty() {
+        stream.write_all(body).await.expect("write body");
+    }
+    let mut buf = Vec::with_capacity(4096);
+    stream.read_to_end(&mut buf).await.expect("read");
+
+    parse_http_response_full(&buf)
+}
+
+fn parse_http_response_full(raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let header_end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response missing CRLFCRLF terminator");
     let header_text = std::str::from_utf8(&raw[..header_end]).expect("ascii headers");
-    let status_line = header_text.lines().next().expect("status line");
+    let mut lines = header_text.lines();
+    let status_line = lines.next().expect("status line");
     let status = status_line
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
 
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            headers.push((k.trim().to_owned(), v.trim().to_owned()));
+        }
+    }
+
     let body = raw[header_end + 4..].to_vec();
-    // Strip transfer-encoding: chunked framing if present.
-    let body = if header_text
-        .to_ascii_lowercase()
-        .contains("transfer-encoding: chunked")
-    {
-        decode_chunked(&body)
-    } else {
-        body
-    };
-    (status, body)
+    let chunked = headers.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked")
+    });
+    let body = if chunked { decode_chunked(&body) } else { body };
+    (status, headers, body)
+}
+
+/// Extract the JSON payload of the first non-empty `data:` line from an
+/// SSE-encoded HTTP body.
+///
+/// rmcp's streamable-HTTP transport prepends a "priming" event with an empty
+/// `data:` field before the real JSON-RPC response. This helper skips empty
+/// data lines and returns the first one with a payload.
+pub fn extract_sse_data(body: &[u8]) -> String {
+    let text = std::str::from_utf8(body).expect("sse body must be utf-8");
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_owned();
+            }
+        }
+    }
+    panic!("no non-empty `data:` line in SSE body: {text:?}");
 }
 
 fn decode_chunked(raw: &[u8]) -> Vec<u8> {
