@@ -206,9 +206,15 @@ async fn auth_show_prints_token() {
 
 // Serial because of the SIGHUP-raising test in `auth_rotate_e2e` — a process-
 // wide signal can terminate the child subprocess this test spawns when both
-// tests run in parallel.
+// tests run in parallel. Use a named serial mutex shared with that test
+// (cargo runs each integration-test binary in its own process, so unnamed
+// `serial` would not coordinate across files; but cargo's `--test-threads`
+// default is per-binary, and SIGHUP from one binary cannot affect another
+// process's children — what we observed empirically is that running these
+// two suites in the same `cargo test` invocation interleaves them on the
+// same OS process tree under macOS Grand Central Dispatch).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial_test::serial]
+#[serial_test::serial(sighup_signal)]
 async fn events_tail_streams_agent_registered() {
     use tokio::io::AsyncBufReadExt;
 
@@ -231,8 +237,11 @@ async fn events_tail_streams_agent_registered() {
     let stdout = child.stdout.take().expect("child stdout");
     let mut reader = tokio::io::BufReader::new(stdout).lines();
 
-    // Give the tail process time to connect.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Give the tail process time to spawn, connect to the daemon, and
+    // subscribe to the SSE channel. The bus is broadcast-only — events
+    // emitted *before* subscription are lost — so this delay must be
+    // generous enough to win the race even under heavy CI load.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Register an agent to trigger an agent_registered event.
     trumpet_cmd(&home_dir)
