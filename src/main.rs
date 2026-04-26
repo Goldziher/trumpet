@@ -1,4 +1,5 @@
 use clap::Parser;
+use trumpet::cli::{AgentCmd, AuthCmd, ChatCmd, EventsTailArgs, TaskCmd, ToolCmd};
 use trumpet::error::CliFormatter;
 
 /// Agent nexus daemon.
@@ -13,12 +14,40 @@ enum Cli {
     Stop,
     /// Show daemon status and connected agents.
     Status,
+    /// Manage registered agents.
+    Agent {
+        #[command(subcommand)]
+        cmd: AgentCmd,
+    },
+    /// Manage A2A tasks.
+    Task {
+        #[command(subcommand)]
+        cmd: TaskCmd,
+    },
+    /// Manage tools.
+    Tool {
+        #[command(subcommand)]
+        cmd: ToolCmd,
+    },
+    /// Manage conversations.
+    Chat {
+        #[command(subcommand)]
+        cmd: ChatCmd,
+    },
+    /// Tail the daemon event stream.
+    Events {
+        #[command(flatten)]
+        args: EventsTailArgs,
+    },
+    /// Manage daemon authentication.
+    Auth {
+        #[command(subcommand)]
+        cmd: AuthCmd,
+    },
 }
 
 #[tokio::main]
 async fn main() {
-    // CLI commands that don't run the daemon use a basic stderr logger.
-    // `trumpet serve` re-initializes tracing from config (level + format).
     let cli = Cli::parse();
     let is_serve = matches!(cli, Cli::Serve);
 
@@ -36,6 +65,12 @@ async fn main() {
         Cli::Start => trumpet::cli::run_start().await,
         Cli::Stop => trumpet::cli::run_stop().await,
         Cli::Status => trumpet::cli::run_status().await,
+        Cli::Agent { cmd } => trumpet::cli::agent::run(cmd).await,
+        Cli::Task { cmd } => trumpet::cli::task::run(cmd).await,
+        Cli::Tool { cmd } => trumpet::cli::tool::run(cmd).await,
+        Cli::Chat { cmd } => trumpet::cli::chat::run(cmd).await,
+        Cli::Events { args } => trumpet::cli::events::run_tail(args).await,
+        Cli::Auth { cmd } => trumpet::cli::auth::run(cmd).await,
     };
 
     if let Err(ref err) = result {
