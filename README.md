@@ -17,46 +17,52 @@ cargo install --path .
 
 ## Quick start
 
-Start the daemon:
+Start the daemon (in another terminal):
 
 ```sh
-trumpet serve
-```
-
-Check status:
-
-```sh
+trumpet start          # daemonize
 trumpet status
 ```
 
-Register an agent:
+Register an agent and submit a task:
 
 ```sh
-curl --unix-socket ~/.trumpet/trumpet.sock \
-  http://localhost/agents/register \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "alice"}'
+trumpet agent register --name alice --tags review,lint
+TASK=$(trumpet task submit --message "review my PR" --json | jq -r .id)
+trumpet task get "$TASK"
 ```
 
-Create a conversation and send a message:
+Tail the live event stream while you work:
 
 ```sh
-curl --unix-socket ~/.trumpet/trumpet.sock \
-  http://localhost/conversations \
-  -H 'Content-Type: application/json' \
-  -d '{"participants": ["AGENT_ID_HERE"]}'
-
-curl --unix-socket ~/.trumpet/trumpet.sock \
-  http://localhost/conversations/CONV_ID/messages \
-  -H 'Content-Type: application/json' \
-  -d '{"sender": "AGENT_ID_HERE", "content": "hello"}'
+trumpet events tail &
 ```
 
-Subscribe to events (SSE):
+Open a conversation between two agents:
 
 ```sh
-curl --unix-socket ~/.trumpet/trumpet.sock http://localhost/events
+trumpet chat new --participants ALICE_ID,BOB_ID
+trumpet chat send CONV_ID --as ALICE_ID --content "hello bob"
+trumpet chat history CONV_ID
 ```
+
+Use `trumpet --help` and `trumpet <subcommand> --help` for the full
+reference; every read command supports `--json` for scripting.
+
+## CLI reference
+
+The `trumpet` binary is both the daemon and the client:
+
+| Command                                                     | Purpose                                       |
+|-------------------------------------------------------------|-----------------------------------------------|
+| `trumpet serve` / `trumpet start` / `trumpet stop`           | Run / daemonize / shut down the daemon        |
+| `trumpet status`                                             | Daemon health and connected-agent summary     |
+| `trumpet agent {register\|list\|get\|deregister\|heartbeat}` | Agent lifecycle                               |
+| `trumpet task {submit\|list\|get\|cancel\|watch}`            | A2A task lifecycle (submit, watch, cancel)    |
+| `trumpet tool {list\|invoke}`                                | Tool registry discovery and invocation        |
+| `trumpet chat {new\|list\|send\|history}`                    | Conversation management                       |
+| `trumpet events tail`                                        | Stream all daemon events as SSE               |
+| `trumpet auth {show\|rotate}`                                | Show or rotate the gRPC bearer token          |
 
 ## Security
 
@@ -84,6 +90,20 @@ Two further protections worth knowing about:
   against `code_tools.workspace_root` (defaulting to the daemon's CWD).
   Path traversal, absolute paths outside the root, and symlink escapes
   are rejected.
+
+### Token rotation
+
+Rotate the gRPC bearer token without restarting the daemon (ADR-021):
+
+```sh
+trumpet auth rotate
+```
+
+This generates a new UUID v4, atomically writes it to
+`~/.trumpet/auth.token` (mode 0600 preserved), and signals the running
+daemon via SIGHUP. The daemon swaps the new value into the bearer-token
+interceptor's `Arc<RwLock<String>>`. In-flight requests finish with the
+old token; new requests must present the new one.
 
 ## Architecture
 
