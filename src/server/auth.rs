@@ -14,13 +14,21 @@
 //! with `0600` permissions; only the daemon owner can read it.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::serve::Listener;
 use tokio::net::{UnixListener, UnixStream, unix::SocketAddr};
 use tonic::{Status, service::Interceptor};
 
 use crate::error::Error;
+
+/// Rotatable shared slot holding the daemon auth token.
+///
+/// Wrapped in [`Arc`] + [`RwLock`] so the gRPC interceptor and the
+/// SIGHUP-driven rotation handler can both observe / mutate the same
+/// underlying string. We use the standard [`RwLock`] (not `tokio::sync`)
+/// because [`Interceptor::call`] is synchronous.
+pub type TokenSlot = Arc<RwLock<String>>;
 
 // ── Token storage ─────────────────────────────────────────────────────────────
 
@@ -172,19 +180,20 @@ impl Listener for PeerCheckedUnixListener {
 /// Tonic [`Interceptor`] that enforces `Authorization: Bearer <token>` on
 /// every incoming gRPC request.
 ///
-/// The expected token is shared via [`Arc`] so the interceptor can be cloned
-/// cheaply for each connection. When `require_auth` is `false`, all requests
-/// are allowed through.
+/// The expected token lives in a [`TokenSlot`] so that
+/// [`reload_token`](super::reload_token) can swap it under a SIGHUP-driven
+/// rotation without restarting the server. Cloning the interceptor is cheap
+/// — it only bumps the reference count.
 #[derive(Clone)]
 pub struct BearerTokenInterceptor {
-    expected: Arc<String>,
+    expected: TokenSlot,
     require_auth: bool,
 }
 
 impl BearerTokenInterceptor {
     /// Create a new interceptor that compares the incoming `Authorization`
     /// header against `Bearer <token>`.
-    pub fn new(token: Arc<String>, require_auth: bool) -> Self {
+    pub fn new(token: TokenSlot, require_auth: bool) -> Self {
         Self {
             expected: token,
             require_auth,
@@ -204,7 +213,11 @@ impl Interceptor for BearerTokenInterceptor {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        let expected = format!("Bearer {}", *self.expected);
+        let token = self
+            .expected
+            .read()
+            .map_err(|_| Status::internal("auth token lock poisoned"))?;
+        let expected = format!("Bearer {}", *token);
 
         // Constant-time comparison would be ideal, but the token is sent in
         // plaintext over a localhost loopback already; timing leaks here are
@@ -217,6 +230,25 @@ impl Interceptor for BearerTokenInterceptor {
             ))
         }
     }
+}
+
+/// Re-read the auth token from `path` and swap it into `slot`.
+///
+/// Used by the SIGHUP signal handler so `trumpet auth rotate` can publish a
+/// new token by writing the file and signalling the daemon. Returns the new
+/// token's value on success.
+///
+/// # Errors
+///
+/// Propagates [`load_or_create_token`] failures (file not readable, empty,
+/// or unwritable).
+pub fn reload_token(path: &Path, slot: &TokenSlot) -> Result<String, Error> {
+    let new_token = load_or_create_token(path)?;
+    let mut guard = slot.write().map_err(|_| Error::InternalUnexpected {
+        reason: "auth token slot lock poisoned during rotation".to_owned(),
+    })?;
+    *guard = new_token.clone();
+    Ok(new_token)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -277,7 +309,7 @@ mod tests {
     #[test]
     fn bearer_interceptor_rejects_missing_header() {
         let mut interceptor =
-            BearerTokenInterceptor::new(Arc::new("secret-token".to_owned()), true);
+            BearerTokenInterceptor::new(Arc::new(RwLock::new("secret-token".to_owned())), true);
         let request = tonic::Request::new(());
         let err = interceptor
             .call(request)
@@ -288,7 +320,7 @@ mod tests {
     #[test]
     fn bearer_interceptor_rejects_wrong_token() {
         let mut interceptor =
-            BearerTokenInterceptor::new(Arc::new("secret-token".to_owned()), true);
+            BearerTokenInterceptor::new(Arc::new(RwLock::new("secret-token".to_owned())), true);
         let mut request = tonic::Request::new(());
         request
             .metadata_mut()
@@ -302,7 +334,7 @@ mod tests {
     #[test]
     fn bearer_interceptor_accepts_correct_token() {
         let mut interceptor =
-            BearerTokenInterceptor::new(Arc::new("secret-token".to_owned()), true);
+            BearerTokenInterceptor::new(Arc::new(RwLock::new("secret-token".to_owned())), true);
         let mut request = tonic::Request::new(());
         request
             .metadata_mut()
@@ -314,13 +346,34 @@ mod tests {
     #[test]
     fn bearer_interceptor_skips_check_when_disabled() {
         let mut interceptor =
-            BearerTokenInterceptor::new(Arc::new("secret-token".to_owned()), false);
+            BearerTokenInterceptor::new(Arc::new(RwLock::new("secret-token".to_owned())), false);
         let request = tonic::Request::new(());
         // No header at all — must still pass through.
         let result = interceptor.call(request);
         assert!(
             result.is_ok(),
             "interceptor must allow all when require_auth=false"
+        );
+    }
+
+    #[test]
+    fn reload_token_swaps_slot_to_disk_value() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.token");
+        load_or_create_token(&path).expect("seed token");
+        let initial = std::fs::read_to_string(&path).unwrap().trim().to_owned();
+
+        let slot: TokenSlot = Arc::new(RwLock::new(initial.clone()));
+
+        let new_value = "rotated-token-value";
+        std::fs::write(&path, format!("{new_value}\n")).unwrap();
+
+        let returned = reload_token(&path, &slot).expect("reload must succeed");
+        assert_eq!(returned, new_value, "reload must return new disk value");
+        assert_eq!(
+            *slot.read().unwrap(),
+            new_value,
+            "reload must publish new value into the shared slot"
         );
     }
 }

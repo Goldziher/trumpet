@@ -204,7 +204,11 @@ async fn auth_show_prints_token() {
         .expect("daemon must shut down cleanly");
 }
 
+// Serial because of the SIGHUP-raising test in `auth_rotate_e2e` — a process-
+// wide signal can terminate the child subprocess this test spawns when both
+// tests run in parallel.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial]
 async fn events_tail_streams_agent_registered() {
     use tokio::io::AsyncBufReadExt;
 

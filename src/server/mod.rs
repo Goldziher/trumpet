@@ -43,6 +43,8 @@ use self::auth::{
     BearerTokenInterceptor, PeerCheckedUnixListener, current_uid, load_or_create_token,
 };
 
+pub use self::auth::reload_token;
+
 /// Start the Trumpet daemon, blocking until Ctrl-C / SIGTERM.
 ///
 /// Binds a Unix domain socket for HTTP, starts gRPC on the configured TCP
@@ -96,7 +98,8 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
     // ── Auth bootstrap ───────────────────────────────────────────────────────
     // Load or generate the gRPC bearer token before binding any TCP listener
     // so unauthenticated callers cannot race ahead of the auth check.
-    let auth_token = Arc::new(load_or_create_token(&config.security.auth_token_path)?);
+    let initial_token = load_or_create_token(&config.security.auth_token_path)?;
+    let auth_token: self::auth::TokenSlot = Arc::new(std::sync::RwLock::new(initial_token));
     if config.security.require_auth {
         info!(
             path = %config.security.auth_token_path.display(),
@@ -107,6 +110,54 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
             "security.require_auth is FALSE — REST/gRPC are open to all local processes"
         );
     }
+
+    // ── PID file ─────────────────────────────────────────────────────────────
+    // Written before any client-facing listener so `trumpet stop` and
+    // `trumpet auth rotate` can find the daemon as soon as it is reachable.
+    crate::daemon::write_pid_file(&config.daemon.pid_file)
+        .await
+        .map_err(|e| crate::error::Error::DaemonBindFailed {
+            path: config.daemon.pid_file.display().to_string(),
+            reason: format!("failed to write pid file: {e}"),
+        })?;
+
+    // ── SIGHUP token reload ──────────────────────────────────────────────────
+    // `trumpet auth rotate` writes a new token to disk and sends SIGHUP. The
+    // handler re-reads the token file and swaps the value into the shared
+    // slot used by the bearer-token interceptor — no listener restart.
+    #[cfg(unix)]
+    let sighup_handle = {
+        let slot = Arc::clone(&auth_token);
+        let token_path = config.security.auth_token_path.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            let mut signal = match tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::hangup(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not install SIGHUP handler; auth rotation disabled");
+                    return;
+                }
+            };
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    sig = signal.recv() => {
+                        if sig.is_none() {
+                            break;
+                        }
+                        match self::auth::reload_token(&token_path, &slot) {
+                            Ok(_) => info!("auth token reloaded from disk"),
+                            Err(e) => tracing::error!(error = %e, "auth token reload failed"),
+                        }
+                    }
+                }
+            }
+        })
+    };
+    #[cfg(not(unix))]
+    let sighup_handle: tokio::task::JoinHandle<()> = tokio::spawn(async {});
     if config.server.host == "0.0.0.0" || config.server.host == "::" {
         tracing::warn!(
             host = %config.server.host,
@@ -264,6 +315,7 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
     snapshot_handle.abort();
     push_handle.abort();
     watchdog_handle.abort();
+    sighup_handle.abort();
     if let Some(handle) = mcp_handle {
         handle.abort();
     }
@@ -275,6 +327,7 @@ pub async fn serve_with_shutdown(config: &Config, cancel: CancellationToken) -> 
     }
 
     let _ = tokio::fs::remove_file(socket_path).await;
+    let _ = crate::daemon::remove_pid_file(&config.daemon.pid_file).await;
     info!("trumpet daemon stopped");
 
     Ok(())
